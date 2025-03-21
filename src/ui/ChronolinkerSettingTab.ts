@@ -16,6 +16,29 @@ export class ChronolinkerSettingTab extends PluginSettingTab {
         
         containerEl.createEl('h1', {text: 'Chronolinker Settings'});
         
+        // Add global update button at the top
+        new Setting(containerEl)
+            .setName('Update All Links in All Streams')
+            .setDesc('Update chronological links for all notes in all streams')
+            .addButton(button => button
+                .setButtonText('Update All Streams')
+                .setCta()
+                .onClick(async () => {
+                    const streams = this.plugin.settings.noteStreams;
+                    if (streams.length === 0) {
+                        new this.plugin.obsidian.Notice('No streams found to update');
+                        return;
+                    }
+                    
+                    new this.plugin.obsidian.Notice(`Starting update of ${streams.length} streams...`);
+                    
+                    for (const stream of streams) {
+                        await this.plugin.noteManager.updateAllNoteLinks(stream);
+                    }
+                    
+                    new this.plugin.obsidian.Notice('Finished updating all streams');
+                }));
+        
         containerEl.createEl('h2', {text: 'Note Streams'});
         
         // Add existing streams
@@ -155,6 +178,16 @@ export class ChronolinkerSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     stream.autoLinking = value;
                     await this.plugin.saveSettings();
+                }));
+                
+        // Add update all links button
+        new Setting(streamEl)
+            .setName('Update All Links')
+            .setDesc('Update chronological links for all notes in this stream')
+            .addButton(button => button
+                .setButtonText('Update Now')
+                .onClick(async () => {
+                    await this.plugin.noteManager.updateAllNoteLinks(stream);
                 }));
         
         new Setting(streamEl)
