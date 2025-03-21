@@ -84,77 +84,121 @@ export class NoteManager {
             return;
         }
 
-        const date = parseDateFromFilename(file.basename, stream.dateFormat);
-        if (!date) {
-            new Notice(`Could not parse date from filename ${file.basename}`);
+        // Validate inputs
+        if (!file || !stream) {
+            new Notice('Error: Invalid file or stream');
             return;
         }
 
-        // Find previous and next notes
-        const prevDate = getPreviousDate(date, stream.noteType);
-        const nextDate = getNextDate(date, stream.noteType);
-        
-        const prevNoteName = formatDateForFilename(prevDate, stream.dateFormat);
-        const nextNoteName = formatDateForFilename(nextDate, stream.dateFormat);
-        
+        if (!stream.folderPath) {
+            new Notice(`Error: Stream folder path is not specified for ${stream.name || 'unnamed stream'}`);
+            return;
+        }
+
+        // Validate file date format
+        const date = parseDateFromFilename(file.basename, stream.dateFormat);
+        if (!date) {
+            new Notice(`Error: Could not parse date from filename ${file.basename} using format ${stream.dateFormat}`);
+            return;
+        }
+
         // Set the updating flag to prevent recursive updates
         this.isUpdating = true;
+        let hasError = false;
         
         try {
+            // Find previous and next notes
+            const prevDate = getPreviousDate(date, stream.noteType);
+            const nextDate = getNextDate(date, stream.noteType);
+            
+            if (!prevDate || !nextDate) {
+                new Notice(`Error: Failed to calculate previous or next date for ${file.basename}`);
+                hasError = true;
+                return;
+            }
+
+            const prevNoteName = formatDateForFilename(prevDate, stream.dateFormat);
+            const nextNoteName = formatDateForFilename(nextDate, stream.dateFormat);
+            
+            if (!prevNoteName || !nextNoteName) {
+                new Notice(`Error: Failed to format date for filenames`);
+                hasError = true;
+                return;
+            }
+            
             // Update frontmatter
             await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-                if (stream.overwriteExisting || !frontmatter[stream.beforeFieldName]) {
-                    // Check if the previous note exists
-                    let prevNotePath = `${stream.folderPath}/${prevNoteName}.md`;
-                    const allFiles = this.app.vault.getMarkdownFiles();
-                    
-                    // Check if a file with the same basename already exists in the folder.
-                    for (const file of allFiles) {
-                        if (file.basename === prevNoteName && file.path.startsWith(stream.folderPath)) {
-                            prevNotePath = file.path;
-                            break;
+                try {
+                    // Handle previous note links
+                    if (stream.overwriteExisting || !frontmatter[stream.beforeFieldName]) {
+                        // Check if the previous note exists
+                        let prevNotePath = `${stream.folderPath}/${prevNoteName}.md`;
+                        const allFiles = this.app.vault.getMarkdownFiles();
+                        
+                        // Check if a file with the same basename already exists in the folder
+                        for (const f of allFiles) {
+                            if (f.basename === prevNoteName && f.path.startsWith(stream.folderPath)) {
+                                prevNotePath = f.path;
+                                break;
+                            }
                         }
-                    }
 
-                    const prevNoteExists = this.app.vault.getAbstractFileByPath(prevNotePath) instanceof TFile;
-                    
-                    if (prevNoteExists) {
-                        frontmatter[stream.beforeFieldName] = `[[${prevNotePath}|${prevNoteName}]]`;
-                    } else {
-                        // Remove the field if the note doesn't exist
-                        if (frontmatter[stream.beforeFieldName]) {
-                            delete frontmatter[stream.beforeFieldName];
+                        const prevNoteExists = this.app.vault.getAbstractFileByPath(prevNotePath) instanceof TFile;
+                        
+                        if (prevNoteExists) {
+                            frontmatter[stream.beforeFieldName] = `[[${prevNotePath}|${prevNoteName}]]`;
+                        } else {
+                            // Remove the field if the note doesn't exist
+                            if (frontmatter[stream.beforeFieldName]) {
+                                delete frontmatter[stream.beforeFieldName];
+                            }
                         }
                     }
+                    
+                    // Handle next note links
+                    if (stream.overwriteExisting || !frontmatter[stream.afterFieldName]) {
+                        // Check if the next note exists
+                        let nextNotePath = `${stream.folderPath}/${nextNoteName}.md`;
+                        const allFiles = this.app.vault.getMarkdownFiles();
+
+                        // Check if a file with the same basename already exists in the folder
+                        for (const f of allFiles) {
+                            if (f.basename === nextNoteName && f.path.startsWith(stream.folderPath)) {
+                                nextNotePath = f.path;
+                                break;
+                            }
+                        }
+
+                        const nextNoteExists = this.app.vault.getAbstractFileByPath(nextNotePath) instanceof TFile;
+                        
+                        if (nextNoteExists) {
+                            frontmatter[stream.afterFieldName] = `[[${nextNotePath}|${nextNoteName}]]`;
+                        } else {
+                            // Remove the field if the note doesn't exist
+                            if (frontmatter[stream.afterFieldName]) {
+                                delete frontmatter[stream.afterFieldName];
+                            }
+                        }
+                    }
+                    return true; // Indicate changes were made
+                } catch (frontmatterError) {
+                    console.error('Error updating frontmatter:', frontmatterError);
+                    hasError = true;
+                    return false; // Indicate no changes should be made
                 }
-                
-                if (stream.overwriteExisting || !frontmatter[stream.afterFieldName]) {
-                    // Check if the next note exists
-                    let nextNotePath = `${stream.folderPath}/${nextNoteName}.md`;
-                    const allFiles = this.app.vault.getMarkdownFiles();
-
-                    // Check if a file with the same basename already exists in the folder.
-                    for (const file of allFiles) {
-                        if (file.basename === nextNoteName && file.path.startsWith(stream.folderPath)) {
-                            nextNotePath = file.path;
-                            break;
-                        }
-                    }
-
-                    const nextNoteExists = this.app.vault.getAbstractFileByPath(nextNotePath) instanceof TFile;
-                    
-                    if (nextNoteExists) {
-                        frontmatter[stream.afterFieldName] = `[[${nextNotePath}|${nextNoteName}]]`;
-                    } else {
-                        // Remove the field if the note doesn't exist
-                        if (frontmatter[stream.afterFieldName]) {
-                            delete frontmatter[stream.afterFieldName];
-                        }
-                    }
-                }
+            }).catch(error => {
+                console.error('Failed to process frontmatter:', error);
+                hasError = true;
+                new Notice(`Error updating ${file.basename}: ${error.message}`);
             });
 
-            new Notice('Updated note links');
+            if (!hasError) {
+                new Notice(`Successfully updated links for ${file.basename}`);
+            }
+        } catch (error) {
+            console.error(`Error updating links for ${file.basename}:`, error);
+            hasError = true;
+            new Notice(`Error updating links for ${file.basename}: ${error.message}`);
         } finally {
             // Reset the flag regardless of success or error
             setTimeout(() => {
@@ -259,26 +303,50 @@ export class NoteManager {
      * Update chronological links for all notes in a stream
      */
     async updateAllNoteLinks(stream: NoteStream): Promise<void> {
-        // Get all markdown files in the stream folder
-        const files = this.app.vault.getMarkdownFiles().filter(file => 
-            file.path.startsWith(stream.folderPath + '/')
-        );
-        
-        if (files.length === 0) {
-            new Notice(`No notes found in ${stream.folderPath}`);
-            return;
-        }
-        
-        let updatedCount = 0;
-        
-        if (stream) {
-            for (const file of files) {
-                // Check if the file belongs to this stream (by checking if the date can be parsed)
-                await this.updateNoteLinks(file, stream);
-                updatedCount++;
+        try {
+            // Check if folder path is valid
+            if (!stream.folderPath) {
+                new Notice('Error: Stream folder path is not specified');
+                return;
             }
+            
+            // Get all markdown files in the stream folder
+            const files = this.app.vault.getMarkdownFiles().filter(file => 
+                file.path.startsWith(stream.folderPath + '/')
+            );
+            
+            if (files.length === 0) {
+                new Notice(`No notes found in ${stream.folderPath}`);
+                return;
+            }
+            
+            let updatedCount = 0;
+            let errorCount = 0;
+            
+            // Update links for each file in the stream
+            for (const file of files) {
+                try {
+                    // Check if the file belongs to this stream (by checking if the date can be parsed)
+                    const date = parseDateFromFilename(file.basename, stream.dateFormat);
+                    if (!date) continue;
+                    
+                    // Use the existing update method
+                    await this.updateNoteLinks(file, stream);
+                    updatedCount++;
+                } catch (fileError) {
+                    errorCount++;
+                    console.error(`Error updating links for file ${file.path}:`, fileError);
+                }
+            }
+            
+            if (errorCount > 0) {
+                new Notice(`Updated ${updatedCount} notes with ${errorCount} errors in stream: ${stream.name || stream.folderPath}`);
+            } else {
+                new Notice(`Successfully updated ${updatedCount} notes in stream: ${stream.name || stream.folderPath}`);
+            }
+        } catch (error) {
+            console.error('Error updating all note links:', error);
+            new Notice(`Error updating links in stream ${stream.name || stream.folderPath}: ${error.message}`);
         }
-        
-        new Notice(`Updated ${updatedCount} notes in stream: ${stream.name || stream.folderPath}`);
     }
 }
