@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
+import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
 import { NoteStream, NoteType } from '../types';
 
 export class ChronolinkerSettingTab extends PluginSettingTab {
@@ -16,7 +16,7 @@ export class ChronolinkerSettingTab extends PluginSettingTab {
         
         containerEl.createEl('h1', {text: 'Chronolinker Settings'});
         
-        // Add global update button at the top
+        // Add global update button at the top with improved error handling
         new Setting(containerEl)
             .setName('Update All Links in All Streams')
             .setDesc('Update chronological links for all notes in all streams')
@@ -24,21 +24,46 @@ export class ChronolinkerSettingTab extends PluginSettingTab {
                 .setButtonText('Update All Streams')
                 .setCta()
                 .onClick(async () => {
-                    const streams = this.plugin.settings.noteStreams;
-                    if (streams.length === 0) {
-                        new this.plugin.obsidian.Notice('No streams found to update');
-                        return;
+                    try {
+                        const streams = this.plugin.settings.noteStreams;
+                        if (streams.length === 0) {
+                            new Notice('No streams found to update');
+                            return;
+                        }
+                        
+                        new Notice(`Starting update of ${streams.length} streams...`);
+                        
+                        let successCount = 0;
+                        let errorCount = 0;
+                        
+                        for (const stream of streams) {
+                            try {
+                                if (!stream.folderPath) {
+                                    new Notice(`Skipping stream "${stream.name || 'Unnamed'}" - No folder path specified`);
+                                    errorCount++;
+                                    continue;
+                                }
+                                
+                                await this.plugin.noteManager.updateAllNoteLinks(stream);
+                                successCount++;
+                            } catch (streamError) {
+                                errorCount++;
+                                console.error(`Error updating stream "${stream.name || 'Unnamed'}":`, streamError);
+                                new Notice(`Error updating stream "${stream.name || 'Unnamed'}": ${streamError.message}`);
+                            }
+                        }
+                        
+                        if (errorCount > 0) {
+                            new Notice(`Finished updating: ${successCount} streams updated successfully, ${errorCount} streams with errors`);
+                        } else {
+                            new Notice(`Successfully updated all ${successCount} streams`);
+                        }
+                    } catch (error) {
+                        console.error('Error updating all streams:', error);
+                        new Notice(`Failed to update streams: ${error.message}`);
                     }
-                    
-                    new this.plugin.obsidian.Notice(`Starting update of ${streams.length} streams...`);
-                    
-                    for (const stream of streams) {
-                        await this.plugin.noteManager.updateAllNoteLinks(stream);
-                    }
-                    
-                    new this.plugin.obsidian.Notice('Finished updating all streams');
                 }));
-        
+                
         containerEl.createEl('h2', {text: 'Note Streams'});
         
         // Add existing streams
