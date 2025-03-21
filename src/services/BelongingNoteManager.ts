@@ -67,8 +67,6 @@ export class BelongingNoteManager {
 title: ${belongingNoteName}
 ---
 
-# ${belongingNoteName}
-
 `;
             }
             
@@ -82,7 +80,7 @@ title: ${belongingNoteName}
         // Open the belonging note
         await this.app.workspace.openLinkText(belongingFile.path, '', false);
         
-        new Notice(`Created/updated belonging note: ${belongingNoteName}`);
+        // new Notice(`Created/updated belonging note: ${belongingNoteName}`);
     }
 
     /**
@@ -233,8 +231,6 @@ title: ${belongingNoteName}
 title: ${belongingNoteName}
 ---
 
-# ${belongingNoteName}
-
 `;
                 }
                 
@@ -324,8 +320,6 @@ title: ${belongingNoteName}
                         initialContent = `---
 title: ${belongingNoteName}
 ---
-
-# ${belongingNoteName}
 
 `;
                     }
