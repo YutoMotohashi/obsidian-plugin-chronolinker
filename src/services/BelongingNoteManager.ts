@@ -108,7 +108,7 @@ export class BelongingNoteManager {
         // Filter files that are directly in the stream folder (not in subfolders)
         // and fall within the date range
         for (const file of allFiles) {
-            if (file.path === stream.folderPath || file.path.startsWith(`${stream.folderPath}/`)) {
+            if (file.path.startsWith(`${stream.folderPath}/`)) {
                 const date = parseDateFromFilename(file.basename, stream.dateFormat);
                 if (date && date.isSameOrAfter(dateRange.start) && date.isSameOrBefore(dateRange.end)) {
                     childNotes.push(file);
