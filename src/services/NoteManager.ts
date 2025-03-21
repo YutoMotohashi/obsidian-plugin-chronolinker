@@ -137,7 +137,7 @@ export class NoteManager {
                         
                         // Check if a file with the same basename already exists in the folder
                         for (const f of allFiles) {
-                            if (f.basename === prevNoteName && f.path.startsWith(stream.folderPath)) {
+                            if (f.basename === prevNoteName && f.path.startsWith(`${stream.folderPath}/`)) {
                                 prevNotePath = f.path;
                                 break;
                             }
@@ -163,7 +163,7 @@ export class NoteManager {
 
                         // Check if a file with the same basename already exists in the folder
                         for (const f of allFiles) {
-                            if (f.basename === nextNoteName && f.path.startsWith(stream.folderPath)) {
+                            if (f.basename === nextNoteName && f.path.startsWith(`${stream.folderPath}/`)) {
                                 nextNotePath = f.path;
                                 break;
                             }
