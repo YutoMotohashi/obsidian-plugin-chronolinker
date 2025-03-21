@@ -38,7 +38,15 @@ export class BelongingNoteManager {
         // Create or get the belonging note
         const belongingNoteName = formatDateForFilename(belongingDate, stream.belongingNoteDateFormat);
         const belongingFolder = stream.belongingNoteFolder || stream.folderPath;
-        const belongingNotePath = `${belongingFolder}/${belongingNoteName}.md`;
+
+        let belongingNotePath = `${belongingFolder}/${belongingNoteName}.md`;
+        const allFiles = this.app.vault.getMarkdownFiles();
+        for (const file of allFiles) {
+            if (file.basename === belongingNoteName && file.path.startsWith(belongingFolder)) {
+                belongingNotePath = file.path;
+                break;
+            }
+        }
         
         let belongingFile = this.app.vault.getAbstractFileByPath(belongingNotePath);
         
