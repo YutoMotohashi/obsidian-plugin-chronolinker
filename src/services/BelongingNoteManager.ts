@@ -152,11 +152,14 @@ export class BelongingNoteManager {
             file.path.startsWith(`${stream.folderPath}/`) || file.path === stream.folderPath
         );
 
-        // Track belonging notes to update and files that have been processed
-        const belongingNotesToUpdate = new Set<string>();
-        const processedFiles = new Set<string>();
-        
-        // First pass: identify all child notes and their belonging notes
+        // Use a map to track unique belonging notes by a composite key (folder + note name)
+        const belongingNotesMap = new Map<string, {
+            belongingNoteName: string,
+            belongingFolder: string,
+            belongingDate: moment.Moment
+        }>();
+
+        // First pass: Identify all child notes and their corresponding belonging note info
         for (const file of allFiles) {
             const date = parseDateFromFilename(file.basename, stream.dateFormat);
             if (!date) continue;
@@ -164,60 +167,20 @@ export class BelongingNoteManager {
             const belongingDate = getBelongingDate(date, stream.noteType, stream.belongingNoteType);
             const belongingNoteName = formatDateForFilename(belongingDate, stream.belongingNoteDateFormat);
             const belongingFolder = stream.belongingNoteFolder || stream.folderPath;
-            let belongingNotePath = `${belongingFolder}/${belongingNoteName}.md`;
-            const allFiles = this.app.vault.getMarkdownFiles();
-            for (const file of allFiles) {
-                if (file.basename === belongingNoteName && file.path.startsWith(belongingFolder) && file.path !== belongingNotePath) {
-                    belongingNotePath = file.path;
-                    break;
-                }
+            const key = `${belongingFolder}|${belongingNoteName}`;
+            if (!belongingNotesMap.has(key)) {
+                belongingNotesMap.set(key, { belongingNoteName, belongingFolder, belongingDate });
             }
-                
-            // Add to the set of belonging notes to update
-            belongingNotesToUpdate.add(belongingNotePath);
-            processedFiles.add(file.path);
         }
 
-        // Second pass: Update or create each belonging note
+        // Second pass: Update (or create) each unique belonging note and update its content
         let notesUpdated = 0;
-        for (const belongingNotePath of belongingNotesToUpdate) {
-            let belongingFile = this.app.vault.getAbstractFileByPath(belongingNotePath);
-            
-            // Create the belonging note if it doesn't exist
-            if (!(belongingFile instanceof TFile)) {
-                const belongingFolder = belongingNotePath.substring(0, belongingNotePath.lastIndexOf('/'));
-                const belongingNoteName = belongingNotePath.substring(belongingNotePath.lastIndexOf('/') + 1, belongingNotePath.lastIndexOf('.'));
-                
-                // Ensure the folder exists
-                await ensureFolderExists(this.app, belongingFolder);
-                
-                // Calculate belonging date from the filename
-                const belongingDate = parseDateFromFilename(belongingNoteName, stream.belongingNoteDateFormat);
-                if (!belongingDate) continue;
-                
-                // Create initial content
-                let initialContent = '';
-                
-                // Try to use a template if specified
-                if (stream.templatePath) {
-                    const templateFile = this.app.vault.getAbstractFileByPath(stream.templatePath);
-                    if (templateFile instanceof TFile) {
-                        initialContent = await this.app.vault.read(templateFile);
-                        
-                        // Process template variables
-                        initialContent = processTemplateVariables(initialContent, belongingDate, stream);
-                    }
-                }
-                
-                // Create the file
-                belongingFile = await this.app.vault.create(belongingNotePath, initialContent);
-            }
-            
-            // Update the belonging note's content to include child notes
-            await this.updateBelongingNoteContent(belongingFile as TFile, stream);
+        for (const { belongingNoteName, belongingFolder, belongingDate } of belongingNotesMap.values()) {
+            const belongingFile = await this.getOrCreateBelongingNote(belongingNoteName, belongingFolder, belongingDate, stream);
+            await this.updateBelongingNoteContent(belongingFile, stream);
             notesUpdated++;
         }
-        
+
         new Notice(`Updated ${notesUpdated} belonging notes for stream: ${stream.name || stream.folderPath}`);
     }
 
