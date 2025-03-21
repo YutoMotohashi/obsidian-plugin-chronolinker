@@ -44,7 +44,6 @@ export class BelongingNoteManager {
         for (const file of allFiles) {
             if (file.basename === belongingNoteName && file.path.startsWith(belongingFolder) && file.path !== belongingNotePath) {
                 belongingNotePath = file.path;
-                new Notice(`Found existing belonging note: ${belongingNotePath}`);
                 break;
             }
         }
@@ -192,7 +191,6 @@ export class BelongingNoteManager {
             for (const file of allFiles) {
                 if (file.basename === belongingNoteName && file.path.startsWith(belongingFolder) && file.path !== belongingNotePath) {
                     belongingNotePath = file.path;
-                    new Notice(`Found existing belonging note: ${belongingNotePath}`);
                     break;
                 }
             }
@@ -283,7 +281,6 @@ export class BelongingNoteManager {
                 for (const file of allFiles) {
                     if (file.basename === belongingNoteName && file.path.startsWith(belongingFolder) && file.path !== belongingNotePath) {
                         belongingNotePath = file.path;
-                        new Notice(`Found existing belonging note: ${belongingNotePath}`);
                         break;
                     }
                 }

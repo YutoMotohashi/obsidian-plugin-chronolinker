@@ -109,7 +109,7 @@ export class NoteManager {
                     const prevNoteExists = this.app.vault.getAbstractFileByPath(prevNotePath) instanceof TFile;
                     
                     if (prevNoteExists) {
-                        frontmatter[stream.beforeFieldName] = `[[${prevNoteName}]]`;
+                        frontmatter[stream.beforeFieldName] = `[[${prevNotePath}|${prevNoteName}]]`;
                     } else {
                         // Remove the field if the note doesn't exist
                         if (frontmatter[stream.beforeFieldName]) {
@@ -124,7 +124,7 @@ export class NoteManager {
                     const nextNoteExists = this.app.vault.getAbstractFileByPath(nextNotePath) instanceof TFile;
                     
                     if (nextNoteExists) {
-                        frontmatter[stream.afterFieldName] = `[[${nextNoteName}]]`;
+                        frontmatter[stream.afterFieldName] = `[[${nextNotePath}|${nextNoteName}]]`;
                     } else {
                         // Remove the field if the note doesn't exist
                         if (frontmatter[stream.afterFieldName]) {
