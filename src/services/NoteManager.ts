@@ -201,12 +201,10 @@ export class NoteManager {
             new Notice(`Error updating links for ${file.basename}: ${error.message}`);
         } finally {
             // Reset the flag regardless of success or error
-            setTimeout(() => {
-                this.isUpdating = false;
-            }, 100); // Small delay to ensure file events are processed, unit is milliseconds
+            this.isUpdating = false;
         }
     }
-    
+
     /**
      * Handle file rename events to update references in other notes
      */
