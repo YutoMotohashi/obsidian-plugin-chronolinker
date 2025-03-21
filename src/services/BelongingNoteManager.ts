@@ -38,7 +38,16 @@ export class BelongingNoteManager {
         // Create or get the belonging note
         const belongingNoteName = formatDateForFilename(belongingDate, stream.belongingNoteDateFormat);
         const belongingFolder = stream.belongingNoteFolder || stream.folderPath;
-        const belongingNotePath = `${belongingFolder}/${belongingNoteName}.md`;
+
+        let belongingNotePath = `${belongingFolder}/${belongingNoteName}.md`;
+        const allFiles = this.app.vault.getMarkdownFiles();
+        for (const file of allFiles) {
+            if (file.basename === belongingNoteName && file.path.startsWith(belongingFolder) && file.path !== belongingNotePath) {
+                belongingNotePath = file.path;
+                new Notice(`Found existing belonging note: ${belongingNotePath}`);
+                break;
+            }
+        }
         
         let belongingFile = this.app.vault.getAbstractFileByPath(belongingNotePath);
         
@@ -59,15 +68,6 @@ export class BelongingNoteManager {
                     // Process template variables
                     initialContent = processTemplateVariables(initialContent, belongingDate, stream);
                 }
-            }
-            
-            if (!initialContent) {
-                // Create basic frontmatter if no template
-                initialContent = `---
-title: ${belongingNoteName}
----
-
-`;
             }
             
             // Create the file
@@ -187,8 +187,16 @@ title: ${belongingNoteName}
             // Create the belonging note name
             const belongingNoteName = formatDateForFilename(belongingDate, stream.belongingNoteDateFormat);
             const belongingFolder = stream.belongingNoteFolder || stream.folderPath;
-            const belongingNotePath = `${belongingFolder}/${belongingNoteName}.md`;
-            
+            let belongingNotePath = `${belongingFolder}/${belongingNoteName}.md`;
+            const allFiles = this.app.vault.getMarkdownFiles();
+            for (const file of allFiles) {
+                if (file.basename === belongingNoteName && file.path.startsWith(belongingFolder) && file.path !== belongingNotePath) {
+                    belongingNotePath = file.path;
+                    new Notice(`Found existing belonging note: ${belongingNotePath}`);
+                    break;
+                }
+            }
+                
             // Add to the set of belonging notes to update
             belongingNotesToUpdate.add(belongingNotePath);
             processedFiles.add(file.path);
@@ -223,15 +231,6 @@ title: ${belongingNoteName}
                         // Process template variables
                         initialContent = processTemplateVariables(initialContent, belongingDate, stream);
                     }
-                }
-                
-                if (!initialContent) {
-                    // Create basic frontmatter if no template
-                    initialContent = `---
-title: ${belongingNoteName}
----
-
-`;
                 }
                 
                 // Create the file
@@ -279,7 +278,17 @@ title: ${belongingNoteName}
                 // Create the belonging note name
                 const belongingNoteName = formatDateForFilename(belongingDate, stream.belongingNoteDateFormat);
                 const belongingFolder = stream.belongingNoteFolder || stream.folderPath;
-                const belongingNotePath = `${belongingFolder}/${belongingNoteName}.md`;
+                let belongingNotePath = `${belongingFolder}/${belongingNoteName}.md`;
+                const allFiles = this.app.vault.getMarkdownFiles();
+                for (const file of allFiles) {
+                    if (file.basename === belongingNoteName && file.path.startsWith(belongingFolder) && file.path !== belongingNotePath) {
+                        belongingNotePath = file.path;
+                        new Notice(`Found existing belonging note: ${belongingNotePath}`);
+                        break;
+                    }
+                }
+        
+
                 
                 // Add to the set of belonging notes to update
                 belongingNotesToUpdate.add(belongingNotePath);
@@ -313,15 +322,6 @@ title: ${belongingNoteName}
                             // Process template variables
                             initialContent = processTemplateVariables(initialContent, belongingDate, stream);
                         }
-                    }
-                    
-                    if (!initialContent) {
-                        // Create basic frontmatter if no template
-                        initialContent = `---
-title: ${belongingNoteName}
----
-
-`;
                     }
                     
                     // Create the file

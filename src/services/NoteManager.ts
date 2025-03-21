@@ -223,17 +223,6 @@ export class NoteManager {
             }
         }
         
-        if (!initialContent) {
-            // Create basic frontmatter if no template
-            initialContent = `---
-title: ${filename}
----
-
-# ${filename}
-
-`;
-        }
-        
         // Create the file
         const file = await this.app.vault.create(filePath, initialContent);
         
