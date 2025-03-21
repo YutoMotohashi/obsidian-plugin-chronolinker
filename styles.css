@@ -6,3 +6,88 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+/* Settings tab styling */
+.stream-settings {
+  padding: 10px;
+  margin-bottom: 20px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  background-color: var(--background-secondary);
+}
+
+.stream-settings h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 8px;
+}
+
+/* Modal styling */
+.chronolinker-modal .date-selection {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 20px;
+}
+
+.chronolinker-modal select,
+.chronolinker-modal input {
+  margin-bottom: 15px;
+}
+
+.chronolinker-modal .button-container {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 15px;
+}
+
+/* Chronolinker belonging notes styling */
+.chronolinker-container {
+  padding: 10px;
+  border-radius: 5px;
+  margin-top: 15px;
+  margin-bottom: 15px;
+  background-color: var(--background-secondary);
+}
+
+.chronolinker-container h2 {
+  margin-top: 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 8px;
+}
+
+.chronolinker-navigation {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 15px;
+}
+
+.chronolinker-navigation button {
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.chronolinker-child-notes {
+  list-style-type: none;
+  padding-left: 10px;
+}
+
+.chronolinker-child-notes li {
+  margin-bottom: 5px;
+  padding: 5px;
+  border-radius: 3px;
+}
+
+.chronolinker-child-notes li:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+/* Alert message styling */
+.chronolinker-alert {
+  padding: 10px;
+  margin-top: 15px;
+  margin-bottom: 15px;
+  border-radius: 5px;
+  background-color: var(--background-modifier-error-rgb);
+  color: var(--text-error);
+}
