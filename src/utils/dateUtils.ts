@@ -1,5 +1,4 @@
-import moment from 'moment';
-import { NoteType, DateRange } from '../types';
+import moment from 'moment';import { NoteType, DateRange } from '../types';
 
 /**
  * Parse a date from a filename using the specified format
@@ -22,9 +21,18 @@ export function formatDateForFilename(date: moment.Moment, format: string): stri
         // Add 1 to make it 1-based (1 for Jan-Jun, 2 for Jul-Dec)
         const displayHalfYear = halfYear + 1;
         
-        // Format all parts except the half-year token
-        const baseFormat = format.replace('[H]H', 'H' + displayHalfYear);
-        return date.format(baseFormat);
+        // For the default format "YYYY-[H]H", handle it directly
+        if (format === 'YYYY-[H]H') {
+            return `${date.format('YYYY')}-H${displayHalfYear}`;
+        }
+        
+        // For custom formats, process each part separately
+        const parts = format.split('[H]H');
+        if (parts.length === 2) {
+            const before = date.format(parts[0]);
+            const after = date.format(parts[1]);
+            return before + 'H' + displayHalfYear + after;
+        }
     }
     
     return date.format(format);
