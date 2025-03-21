@@ -5,6 +5,7 @@ import { BelongingNoteManager } from './services/BelongingNoteManager';
 import { CreateNoteModal } from './ui/CreateNoteModal';
 import { ChronolinkerSettingTab } from './ui/ChronolinkerSettingTab';
 import { findNoteStream } from './utils/fileUtils';
+import { StreamSelectionModal } from './ui/StreamSelectionModal';
 
 export default class ChronolinkerPlugin extends Plugin {
   settings: ChronolinkerSettings;
@@ -21,11 +22,6 @@ export default class ChronolinkerPlugin extends Plugin {
 
     // Add settings tab
     this.addSettingTab(new ChronolinkerSettingTab(this.app, this));
-
-    // Add ribbon icon
-    this.addRibbonIcon('links-going-out', 'Chronolinker', (evt: MouseEvent) => {
-      new Notice('Chronolinker is active!');
-    });
 
     // Register commands
     this.addCommands();
@@ -113,7 +109,7 @@ export default class ChronolinkerPlugin extends Plugin {
     // Create belonging note
     this.addCommand({
       id: 'create-belonging-note',
-      name: 'Create or Update Belonging Note',
+      name: 'Create or Update Belonging Note for Current File',
       checkCallback: (checking: boolean) => {
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (activeView) {
@@ -137,6 +133,62 @@ export default class ChronolinkerPlugin extends Plugin {
       name: 'Create New Note',
       callback: () => {
         new CreateNoteModal(this.app, this).open();
+      }
+    });
+
+    // Update belonging notes for a specific stream
+    this.addCommand({
+      id: 'update-belonging-notes-for-stream',
+      name: 'Update All Belonging Notes for a Stream',
+      callback: () => {
+        // Filter streams that have belonging notes enabled
+        const enabledStreams = this.settings.noteStreams.filter(stream => stream.enableBelongingNotes);
+        
+        if (enabledStreams.length === 0) {
+          new Notice('No streams have belonging notes enabled');
+          return;
+        }
+        
+        // If there's only one stream with belonging notes enabled, update it directly
+        if (enabledStreams.length === 1) {
+          this.belongingNoteManager.updateAllBelongingNotesForStream(enabledStreams[0]);
+          return;
+        }
+        
+        // Otherwise, show a modal to select which stream to update
+        new StreamSelectionModal(this.app, enabledStreams, (selectedStream) => {
+          this.belongingNoteManager.updateAllBelongingNotesForStream(selectedStream);
+        }).open();
+      }
+    });
+
+    // Update belonging notes for all streams
+    this.addCommand({
+      id: 'update-all-belonging-notes',
+      name: 'Update All Belonging Notes for All Streams',
+      callback: () => {
+        this.belongingNoteManager.updateAllBelongingNotes(this.settings.noteStreams);
+      }
+    });
+
+    // Update belonging notes for specific file's stream
+    this.addCommand({
+      id: 'update-belonging-notes-for-current-file-stream',
+      name: "Update All Belonging Notes for Current File's Stream",
+      checkCallback: (checking: boolean) => {
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (activeView) {
+          if (!checking) {
+            const stream = findNoteStream(activeView.file, this.settings.noteStreams);
+            if (stream && stream.enableBelongingNotes) {
+              this.belongingNoteManager.updateAllBelongingNotesForStream(stream);
+            } else {
+              new Notice('This note does not belong to any configured stream with belonging notes enabled');
+            }
+          }
+          return true;
+        }
+        return false;
       }
     });
   }
