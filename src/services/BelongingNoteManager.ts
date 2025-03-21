@@ -106,16 +106,22 @@ title: ${belongingNoteName}
         const startStr = formatDateForFilename(dateRange.start, stream.dateFormat);
         const endStr = formatDateForFilename(dateRange.end, stream.dateFormat);
         
-        // Get all files in the stream folder
-        const files = this.app.vault.getMarkdownFiles().filter(f => 
-            f.path.startsWith(stream.folderPath)
-        );
+        // Get all markdown files in the vault
+        const allFiles = this.app.vault.getMarkdownFiles();
         
-        // Filter files that fall within the date range
-        for (const file of files) {
-            const date = parseDateFromFilename(file.basename, stream.dateFormat);
-            if (date && date.isSameOrAfter(dateRange.start) && date.isSameOrBefore(dateRange.end)) {
-                childNotes.push(file);
+        // Filter files that are directly in the stream folder (not in subfolders)
+        // and fall within the date range
+        for (const file of allFiles) {
+            // Get the parent folder path of the file
+            const pathParts = file.path.split('/');
+            const parentFolderPath = pathParts.slice(0, pathParts.length - 1).join('/');
+            
+            // Check if the file is directly in the stream folder, not in a subfolder
+            if (parentFolderPath === stream.folderPath) {
+                const date = parseDateFromFilename(file.basename, stream.dateFormat);
+                if (date && date.isSameOrAfter(dateRange.start) && date.isSameOrBefore(dateRange.end)) {
+                    childNotes.push(file);
+                }
             }
         }
         
@@ -131,14 +137,18 @@ title: ${belongingNoteName}
             return 0;
         });
         
-        // Update the belonging note content
+        // Update the belonging note frontmatter
         await this.app.fileManager.processFrontMatter(belongingFile, (frontmatter) => {
-            // Add the child notes to frontmatter
-            frontmatter['child-notes'] = childNotes.map(f => `[[${f.basename}]]`);
+            // Only store the date range in frontmatter, not the child notes
             frontmatter['date-range'] = {
                 start: startStr,
                 end: endStr
             };
+            
+            // Remove the child-notes from frontmatter if it exists
+            if (frontmatter['child-notes']) {
+                delete frontmatter['child-notes'];
+            }
         });
         
         // Read the current content
@@ -148,8 +158,9 @@ title: ${belongingNoteName}
         const childNotesSection = /## Child Notes\s([\s\S]*?)(?=\n## |$)/;
         const match = content.match(childNotesSection);
         
-        // Create the new child notes list
-        const childNotesList = childNotes.map(f => `- [[${f.basename}]]`).join('\n');
+        // Create the new child notes list with full paths for unambiguous linking
+        // Format: [[full/path/to/note|display name]]
+        const childNotesList = childNotes.map(f => `- [[${f.path.replace('.md', '')}|${f.basename}]]`).join('\n');
         const newChildNotesSection = `## Child Notes\n\n${childNotesList}\n`;
         
         if (match) {

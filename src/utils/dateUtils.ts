@@ -13,6 +13,20 @@ export function parseDateFromFilename(filename: string, format: string): moment.
  * Format a date for a filename using the specified format
  */
 export function formatDateForFilename(date: moment.Moment, format: string): string {
+    // Special case for half-year format to use 1-based half-year number instead of 0-based
+    if (format.includes('[H]H')) {
+        // Get the month (0-11)
+        const month = date.month();
+        // Calculate half-year (0 for Jan-Jun, 1 for Jul-Dec)
+        const halfYear = Math.floor(month / 6);
+        // Add 1 to make it 1-based (1 for Jan-Jun, 2 for Jul-Dec)
+        const displayHalfYear = halfYear + 1;
+        
+        // Format all parts except the half-year token
+        const baseFormat = format.replace('[H]H', 'H' + displayHalfYear);
+        return date.format(baseFormat);
+    }
+    
     return date.format(format);
 }
 
