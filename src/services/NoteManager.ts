@@ -212,13 +212,13 @@ export class NoteManager {
         // Get all configured streams
         for (const stream of noteStreams) {
             // Check if the old path was in the stream's folder
-            if (!oldPath.startsWith(stream.folderPath)) {
+            if (!oldPath.startsWith(`${stream.folderPath}/`)) {
                 continue;
             }
             
             // Get all notes in the folder
             const files = this.app.vault.getMarkdownFiles().filter(f => 
-                f.path.startsWith(stream.folderPath)
+                f.path.startsWith(`${stream.folderPath}/`) 
             );
             
             // Update any references to the old filename in frontmatter
@@ -310,7 +310,7 @@ export class NoteManager {
             
             // Get all markdown files in the stream folder
             const files = this.app.vault.getMarkdownFiles().filter(file => 
-                file.path.startsWith(stream.folderPath + '/')
+                file.path.startsWith(`${stream.folderPath}/`)
             );
             
             if (files.length === 0) {

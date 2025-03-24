@@ -32,7 +32,7 @@ export class BelongingNoteManager {
         
         // Check if a file with the same basename already exists in the folder.
         for (const file of allFiles) {
-            if (file.basename === belongingNoteName && file.path.startsWith(belongingFolder) && file.path !== belongingNotePath) {
+            if (file.basename === belongingNoteName && file.path.startsWith(`${belongingFolder}/`) && file.path !== belongingNotePath) {
                 belongingNotePath = file.path;
                 break;
             }

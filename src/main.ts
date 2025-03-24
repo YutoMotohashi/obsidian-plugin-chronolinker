@@ -261,7 +261,7 @@ export default class ChronolinkerPlugin extends Plugin {
     
     // Get all notes in the folder
     const files = this.app.vault.getMarkdownFiles().filter(f => 
-      f.path.startsWith(stream.folderPath) && f !== file
+      f.path.startsWith(`${stream.folderPath}/`) && f !== file
     );
     
     // Check each file to see if it should link to our new file
