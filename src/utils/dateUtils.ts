@@ -4,8 +4,22 @@ import moment from 'moment';import { NoteType, DateRange } from '../types';
  * Parse a date from a filename using the specified format
  */
 export function parseDateFromFilename(filename: string, format: string): moment.Moment | null {
-    const date = moment(filename, format, true);
-    return date.isValid() ? date : null;
+    if (format === 'YYYY-[H]H') {
+        // YYYY is year and H1 is 01-01 and H2 is 07-01
+        const year = filename.split('-')[0];
+        const halfYear = filename.split('-')[1];
+        if (halfYear === 'H1') {
+            return moment().year(year).month(0).date(1);
+        } else if (halfYear === 'H2') {
+            return moment().year(year).month(6).date(1);
+        } else {
+            // Error
+            return null;
+        }
+    } else {
+        const date = moment(filename, format, true);
+        return date.isValid() ? date : null;
+    }
 }
 
 /**
@@ -17,13 +31,11 @@ export function formatDateForFilename(date: moment.Moment, format: string): stri
         // Get the month (0-11)
         const month = date.month();
         // Calculate half-year (0 for Jan-Jun, 1 for Jul-Dec)
-        const halfYear = Math.floor(month / 6);
-        // Add 1 to make it 1-based (1 for Jan-Jun, 2 for Jul-Dec)
-        const displayHalfYear = halfYear + 1;
+        const halfYear = Math.floor(month / 6) + 1;
         
         // For the default format "YYYY-[H]H", handle it directly
         if (format === 'YYYY-[H]H') {
-            return `${date.format('YYYY')}-H${displayHalfYear}`;
+            return `${date.format('YYYY')}-H${halfYear}`;
         }
         
         // For custom formats, process each part separately
@@ -31,7 +43,7 @@ export function formatDateForFilename(date: moment.Moment, format: string): stri
         if (parts.length === 2) {
             const before = date.format(parts[0]);
             const after = date.format(parts[1]);
-            return before + 'H' + displayHalfYear + after;
+            return before + 'H' + halfYear + after;
         }
     }
     
