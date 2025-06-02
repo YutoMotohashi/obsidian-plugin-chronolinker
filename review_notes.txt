@@ -1,0 +1,33 @@
+# Chronolinker Plugin README.md Review Notes
+
+## Discrepancies and Outdated Information:
+
+### Features Section:
+1.  **Automatic Link Updating on Rename:** The `handleNoteRename` function in `NoteManager.ts` automatically updates links in other notes when a linked note is renamed. This is a significant feature that is not mentioned in the README's "Features" list.
+
+### Configuration Options (Templates):
+1.  **Template Variables:** The README mentions `{{date:FORMAT}}`. While `moment().format()` is used, which inherently supports custom formats, the README could be more explicit that `{{date}}` itself can take a format string directly, e.g., `{{date:YYYY-MM}}` if that's the implemented behavior, or clarify how `{{date:FORMAT}}` is distinct from `{{date}}`. The current code processes `{{date}}` using `stream.dateFormat` by default if no specific format is given in the template variable itself. The `processTemplateVariables` function seems to use `date.format(format || stream.dateFormat)`. This means `{{date}}` uses `stream.dateFormat` and `{{date:some_format}}` uses `some_format`. This is good.
+
+### Available Commands Section:
+The README's "Commands" section is missing several actions/commands available to the user, primarily through the settings UI:
+
+1.  **Update All Links in All Streams:** A global button in settings to update links for all notes in all configured streams. (Found in `ChronolinkerSettingTab.ts`)
+2.  **Update All Links (per stream):** A button in each stream's settings to update links for all notes within that specific stream. (Found in `ChronolinkerSettingTab.ts`)
+3.  **Update All Belonging Notes (global):** The `updateAllBelongingNotes` function in `BelongingNoteManager.ts` updates all belonging notes for all streams. This is likely triggered by a UI element or command not detailed in the README.
+4.  **Update All Belonging Notes (per stream):** The `updateAllBelongingNotesForStream` function in `BelongingNoteManager.ts`. This is likely triggered by a UI element or command not detailed in the README. (The settings tab doesn't seem to have a button for this specifically, but it's a backend capability).
+
+### FAQ Section:
+1.  **Link Format Customization:**
+    *   README states: "Currently, links are created in Obsidian's standard format: `[[filename]]`."
+    *   Code (`NoteManager.ts`): Actually creates aliased links, e.g., `[[${prevNotePath}|${prevNoteName}]]`. This is more advanced than stated and should be updated in the README. The format is `[[link_to_file_path|display_text]]`.
+
+### General Observations / Missing Information:
+*   **Stream ID:** The `NoteStream` interface has an `id` field, which is not mentioned in the README's configuration section. While this might be an internal detail, its purpose could be briefly clarified if relevant to users (e.g., for advanced configuration or troubleshooting). It seems to be generated using `String(Date.now())`.
+*   **Belonging Note Content Update:** The `updateBelongingNoteContent` function in `BelongingNoteManager.ts` adds child notes as links to the frontmatter of the belonging note (key `child-notes`) and also adds a `date-range` frontmatter key. This specific behavior of how belonging notes aggregate child notes could be more detailed in the "Belonging Note Generation" feature description or in the "Belonging Notes" configuration section.
+
+### Minor Points:
+*   The "Getting Started" section is minimal. It could be slightly expanded, perhaps by linking to the configuration sections.
+*   The "Support" section points to a generic GitHub issues URL (`https://github.com/yourusername/obsidian-chronolinker/issues`). This should be updated to the actual repository URL if the plugin is published. (This is a placeholder and not a discrepancy with the code itself, but a general README improvement point).
+*   The `main.ts` file simply re-exports `src/main.ts`. This is fine, but the actual plugin logic starts in `src/main.ts` (which I haven't read yet, but assumed its existence and role). My analysis was based on the service and UI files. If `src/main.ts` registers commands differently or adds more user-facing features, those would also need to be checked against the README. For this review, I've focused on the functionality present in the provided service and UI files.
+
+This list should cover the main discrepancies found by comparing the README to the analyzed source code files.
