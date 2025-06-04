@@ -62,7 +62,7 @@ You can specify a template file for new notes. The template can include variable
 - **Create or Update Belonging Note**: Creates or refreshes the belonging (parent) note associated with the currently active note's stream and date.
 - **Create New Note**: Create a new note in a specific stream.
 - **Update All Links in All Streams**: Updates chronological links for all notes in all configured streams. (Available via a button in plugin settings).
-- **Update All Links for a Stream**: Updates chronological links for all notes within a specific stream. (Available via a button in plugin settings for each stream).
+- **Update All Links in a Stream**: Updates chronological links for all notes within a specific stream. (Available via a button in plugin settings for each stream).
 - **Update All Belonging Notes for All Streams**: Updates all belonging notes across all streams that have the feature enabled. (May be available as a command or via settings).
 - **Update All Belonging Notes for a Stream**: Updates all belonging notes for a specific stream. (May be available as a command or via settings).
 
@@ -117,7 +117,7 @@ A: Links are automatically created using Obsidian's aliased link format: `[[path
 
 ## Support
 
-If you find a bug or have a feature request, please [create an issue](https://github.com/your-username/your-plugin-repo/issues) on GitHub.
+If you find a bug or have a feature request, please [create an issue](https://github.com/YutoMotohashi/obsidian-plugin-chronolinker/issues) on GitHub.
 
 ## License
 
