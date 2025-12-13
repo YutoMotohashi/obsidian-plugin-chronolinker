@@ -1,4 +1,77 @@
-import moment from 'moment';import { NoteType, DateRange } from '../types';
+import moment from 'moment';
+import { NoteType, DateRange } from '../types';
+
+function normalizeWeekYearFormat(format: string): string {
+    let inBrackets = false;
+    let hasIsoWeekToken = false;
+    let hasLocaleWeekToken = false;
+    let hasIsoWeekYearToken = false;
+    let hasLocaleWeekYearToken = false;
+
+    for (let i = 0; i < format.length; i++) {
+        const ch = format[i];
+        if (ch === '[') {
+            inBrackets = true;
+            continue;
+        }
+        if (ch === ']') {
+            inBrackets = false;
+            continue;
+        }
+        if (inBrackets) continue;
+
+        if (ch === 'W') hasIsoWeekToken = true;
+        if (ch === 'w') hasLocaleWeekToken = true;
+
+        if (format.startsWith('GGGG', i) || format.startsWith('GG', i)) hasIsoWeekYearToken = true;
+        if (format.startsWith('gggg', i) || format.startsWith('gg', i)) hasLocaleWeekYearToken = true;
+    }
+
+    // If a format uses week numbers, the year should be the corresponding week-year.
+    // Users commonly configure `YYYY-[W]ww` / `YYYY-[W]WW`, but `YYYY` is calendar-year.
+    if (hasIsoWeekToken && !hasIsoWeekYearToken) {
+        return replaceYearTokensOutsideBrackets(format, { YYYY: 'GGGG', YY: 'GG' });
+    }
+    if (!hasIsoWeekToken && hasLocaleWeekToken && !hasLocaleWeekYearToken) {
+        return replaceYearTokensOutsideBrackets(format, { YYYY: 'gggg', YY: 'gg' });
+    }
+
+    return format;
+}
+
+function replaceYearTokensOutsideBrackets(format: string, replacements: Record<string, string>): string {
+    let inBrackets = false;
+    let out = '';
+
+    for (let i = 0; i < format.length; i++) {
+        const ch = format[i];
+        if (ch === '[') {
+            inBrackets = true;
+            out += ch;
+            continue;
+        }
+        if (ch === ']') {
+            inBrackets = false;
+            out += ch;
+            continue;
+        }
+
+        if (!inBrackets && format.startsWith('YYYY', i) && replacements.YYYY) {
+            out += replacements.YYYY;
+            i += 3;
+            continue;
+        }
+        if (!inBrackets && format.startsWith('YY', i) && replacements.YY) {
+            out += replacements.YY;
+            i += 1;
+            continue;
+        }
+
+        out += ch;
+    }
+
+    return out;
+}
 
 /**
  * Parse a date from a filename using the specified format
@@ -17,7 +90,7 @@ export function parseDateFromFilename(filename: string, format: string): moment.
             return null;
         }
     } else {
-        const date = moment(filename, format, true);
+        const date = moment(filename, normalizeWeekYearFormat(format), true);
         return date.isValid() ? date : null;
     }
 }
@@ -47,7 +120,7 @@ export function formatDateForFilename(date: moment.Moment, format: string): stri
         }
     }
     
-    return date.format(format);
+    return date.format(normalizeWeekYearFormat(format));
 }
 
 /**
