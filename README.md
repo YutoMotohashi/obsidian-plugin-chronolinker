@@ -5,12 +5,13 @@ Chronolinker is an Obsidian plugin that automates the chronological linking betw
 ## Features
 
 - **Multiple Note Streams**: Configure different streams for separate categories (personal, work, research, etc.)
-- **Automatic Frontmatter Linking**: Automatically adds links to previous and next notes in the sequence
-- **Belonging Note Generation**: Creates parent notes (e.g., weekly notes) that aggregate child notes (e.g., daily notes)
-- **Navigation Commands**: Quickly jump to the next or previous note in a sequence
-- **Customizable Field Names**: Define your own frontmatter field names for previous and next note links
-- **Template Support**: Use templates for new notes with variables for dates and links
-- **Multiple Note Types**: Support for daily, weekly, monthly, quarterly, half-yearly, and yearly notes
+- **Automatic Frontmatter Linking**: Automatically adds links to previous and next notes in the sequence.
+- **Automatic Link Updating on Rename**: Automatically updates links in other notes when a linked note is renamed.
+- **Belonging Note Generation**: Creates parent notes (e.g., weekly notes) that aggregate child notes (e.g., daily notes). These belonging notes include `child-notes` (a list of links to child notes) and `date-range` in their frontmatter.
+- **Navigation Commands**: Quickly jump to the next or previous note in a sequence.
+- **Customizable Field Names**: Define your own frontmatter field names for previous and next note links.
+- **Template Support**: Use templates for new notes with variables for dates and links. (See Template section for details).
+- **Multiple Note Types**: Support for daily, weekly, monthly, quarterly, half-yearly, and yearly notes.
 
 ## Getting Started
 
@@ -37,17 +38,18 @@ Each note stream represents a separate collection of chronologically linked note
 
 For each stream, you can enable belonging notes to automatically generate parent notes that aggregate child notes:
 
-- **Belonging Note Folder**: Where to store the belonging notes
-- **Belonging Note Type**: The type of the parent note (e.g., weekly for daily notes)
-- **Belonging Note Date Format**: Date format for parent note filenames
+- **Belonging Note Folder**: Where to store the belonging notes.
+- **Belonging Note Type**: The type of the parent note (e.g., weekly for daily notes).
+- **Belonging Note Date Format**: Date format for parent note filenames.
+- **Content**: Belonging notes automatically include a `date-range` key in their frontmatter, specifying the period they cover, and a `child-notes` key, which is a list of links to the individual notes within that period.
 
 ### Templates
 
 You can specify a template file for new notes. The template can include variables:
 
-- `{{date}}`: The date in YYYY-MM-DD format
-- `{{date:FORMAT}}`: The date in a custom format
-- `{{title}}`: The filename (without extension)
+- `{{date}}`: The date of the note. By default, this is formatted according to the stream's `dateFormat`.
+- `{{date:YOUR_FORMAT}}`: The date of the note, formatted according to `YOUR_FORMAT` (e.g., `YYYY-MM-DD`, `dddd, MMMM Do YYYY`).
+- `{{title}}`: The filename (without extension).
 - `{{stream}}`: The name of the stream
 - `{{prevDate}}`: The date of the previous note
 - `{{nextDate}}`: The date of the next note
@@ -56,9 +58,15 @@ You can specify a template file for new notes. The template can include variable
 
 - **Jump to Previous Note**: Navigate to the previous note in the sequence
 - **Jump to Next Note**: Navigate to the next note in the sequence
-- **Update Chronological Links**: Manually update the links in the current note
-- **Create or Update Belonging Note**: Create or refresh the parent note for the current note
-- **Create New Note**: Create a new note in a specific stream
+- **Update Chronological Links**: Manually update the links in the current note.
+- **Create or Update Belonging Note**: Creates or refreshes the belonging (parent) note associated with the currently active note's stream and date.
+- **Create New Note**: Create a new note in a specific stream.
+- **Update All Links in All Streams**: Updates chronological links for all notes in all configured streams. (Available via a button in plugin settings).
+- **Update All Links in a Stream**: Updates chronological links for all notes within a specific stream. (Available via a button in plugin settings for each stream).
+- **Update All Belonging Notes for All Streams**: Updates all belonging notes across all streams that have the feature enabled. (May be available as a command or via settings).
+- **Update All Belonging Notes for a Stream**: Updates all belonging notes for a specific stream. (May be available as a command or via settings).
+
+*Note: Some of the "Update All..." commands are available as buttons within the plugin's settings panel rather than directly from the Obsidian command palette.*
 
 ## Examples
 
@@ -99,7 +107,7 @@ A: Yes, you can create multiple streams that point to the same folder but with d
 A: The plugin will not create a link to non-existent notes, but you'll have the option to create them when navigating.
 
 **Q: Can I customize the format of the links?**
-A: Currently, links are created in Obsidian's standard format: `[[filename]]`. Future versions may support additional link formats.
+A: Links are automatically created using Obsidian's aliased link format: `[[path/to/note|display name]]`. For example, `[[Journal/2023-10-26|2023-10-26]]`. This provides a clean display name while ensuring the link points to the correct file. Advanced customization of the link structure itself is not currently supported.
 
 ## Troubleshooting
 
@@ -109,7 +117,7 @@ A: Currently, links are created in Obsidian's standard format: `[[filename]]`. F
 
 ## Support
 
-If you find a bug or have a feature request, please [create an issue](https://github.com/yourusername/obsidian-chronolinker/issues) on GitHub.
+If you find a bug or have a feature request, please [create an issue](https://github.com/YutoMotohashi/obsidian-plugin-chronolinker/issues) on GitHub.
 
 ## License
 
