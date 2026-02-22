@@ -12,6 +12,24 @@ export class NoteManager {
     constructor(app: App) {
         this.app = app;
     }
+
+    private findNoteInStreamByBasename(stream: NoteStream, noteName: string): TFile | null {
+        const notePath = `${stream.folderPath}/${noteName}.md`;
+        const directMatch = this.app.vault.getAbstractFileByPath(notePath);
+
+        if (directMatch instanceof TFile) {
+            return directMatch;
+        }
+
+        const files = this.app.vault.getMarkdownFiles();
+        for (const file of files) {
+            if (file.path.startsWith(`${stream.folderPath}/`) && file.basename === noteName) {
+                return file;
+            }
+        }
+
+        return null;
+    }
     
     /**
      * Navigate to the previous note in the chronological sequence
@@ -28,9 +46,7 @@ export class NoteManager {
         
         // Find or create the previous note
         const prevNoteName = formatDateForFilename(prevDate, stream.dateFormat);
-        const prevNotePath = `${stream.folderPath}/${prevNoteName}.md`;
-        
-        const prevFile = this.app.vault.getAbstractFileByPath(prevNotePath);
+        const prevFile = this.findNoteInStreamByBasename(stream, prevNoteName);
         
         if (prevFile instanceof TFile) {
             await this.app.workspace.openLinkText(prevFile.path, '', false);
@@ -59,9 +75,7 @@ export class NoteManager {
         
         // Find or create the next note
         const nextNoteName = formatDateForFilename(nextDate, stream.dateFormat);
-        const nextNotePath = `${stream.folderPath}/${nextNoteName}.md`;
-        
-        const nextFile = this.app.vault.getAbstractFileByPath(nextNotePath);
+        const nextFile = this.findNoteInStreamByBasename(stream, nextNoteName);
         
         if (nextFile instanceof TFile) {
             await this.app.workspace.openLinkText(nextFile.path, '', false);
