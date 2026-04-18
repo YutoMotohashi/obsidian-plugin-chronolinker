@@ -79,8 +79,11 @@ function replaceYearTokensOutsideBrackets(format: string, replacements: Record<s
 export function parseDateFromFilename(filename: string, format: string): moment.Moment | null {
     if (format === 'YYYY-[H]H') {
         // YYYY is year and H1 is 01-01 and H2 is 07-01
-        const year = filename.split('-')[0];
+        const year = Number.parseInt(filename.split('-')[0], 10);
         const halfYear = filename.split('-')[1];
+        if (Number.isNaN(year)) {
+            return null;
+        }
         if (halfYear === 'H1') {
             return moment().year(year).month(0).date(1);
         } else if (halfYear === 'H2') {

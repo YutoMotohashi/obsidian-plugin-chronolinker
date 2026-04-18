@@ -19,6 +19,7 @@ export default class ChronolinkerPlugin extends Plugin {
     // Initialize service managers
     this.noteManager = new NoteManager(this.app);
     this.belongingNoteManager = new BelongingNoteManager(this.app);
+    this.noteManager.setBelongingNoteManager(this.belongingNoteManager);
 
     // Add settings tab
     this.addSettingTab(new ChronolinkerSettingTab(this.app, this));
@@ -49,11 +50,12 @@ export default class ChronolinkerPlugin extends Plugin {
       name: 'Jump to Previous Note',
       checkCallback: (checking: boolean) => {
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView) {
+        const activeFile = activeView?.file;
+        if (activeFile) {
           if (!checking) {
-            const stream = findNoteStream(activeView.file, this.settings.noteStreams);
+            const stream = findNoteStream(activeFile, this.settings.noteStreams);
             if (stream) {
-              this.noteManager.navigateToPreviousNote(activeView.file, stream);
+              this.noteManager.navigateToPreviousNote(activeFile, stream);
             } else {
               new Notice('This note does not belong to any configured stream');
             }
@@ -70,11 +72,12 @@ export default class ChronolinkerPlugin extends Plugin {
       name: 'Jump to Next Note',
       checkCallback: (checking: boolean) => {
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView) {
+        const activeFile = activeView?.file;
+        if (activeFile) {
           if (!checking) {
-            const stream = findNoteStream(activeView.file, this.settings.noteStreams);
+            const stream = findNoteStream(activeFile, this.settings.noteStreams);
             if (stream) {
-              this.noteManager.navigateToNextNote(activeView.file, stream);
+              this.noteManager.navigateToNextNote(activeFile, stream);
             } else {
               new Notice('This note does not belong to any configured stream');
             }
@@ -91,11 +94,12 @@ export default class ChronolinkerPlugin extends Plugin {
       name: 'Update Chronological Links',
       checkCallback: (checking: boolean) => {
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView) {
+        const activeFile = activeView?.file;
+        if (activeFile) {
           if (!checking) {
-            const stream = findNoteStream(activeView.file, this.settings.noteStreams);
+            const stream = findNoteStream(activeFile, this.settings.noteStreams);
             if (stream) {
-              this.noteManager.updateNoteLinks(activeView.file, stream);
+              this.noteManager.updateNoteLinks(activeFile, stream);
             } else {
               new Notice('This note does not belong to any configured stream');
             }
@@ -112,11 +116,12 @@ export default class ChronolinkerPlugin extends Plugin {
       name: 'Create or Update Belonging Note for Current File',
       checkCallback: (checking: boolean) => {
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView) {
+        const activeFile = activeView?.file;
+        if (activeFile) {
           if (!checking) {
-            const stream = findNoteStream(activeView.file, this.settings.noteStreams);
+            const stream = findNoteStream(activeFile, this.settings.noteStreams);
             if (stream && stream.enableBelongingNotes) {
-              this.belongingNoteManager.createOrUpdateBelongingNote(activeView.file, stream);
+              this.belongingNoteManager.createOrUpdateBelongingNote(activeFile, stream);
             } else {
               new Notice('This note does not belong to any configured stream with belonging notes enabled');
             }
@@ -134,6 +139,24 @@ export default class ChronolinkerPlugin extends Plugin {
       callback: () => {
         new CreateNoteModal(this.app, this).open();
       }
+    });
+
+    this.settings.noteStreams.forEach(stream => {
+      this.addCommand({
+        id: `open-current-note-${stream.id}`,
+        name: `Open Current Note: ${stream.name}`,
+        callback: async () => {
+          await this.noteManager.openCurrentNoteForStream(stream);
+        }
+      });
+
+      this.addCommand({
+        id: `open-current-note-${stream.id}-new-tab`,
+        name: `Open Current Note In New Tab: ${stream.name}`,
+        callback: async () => {
+          await this.noteManager.openCurrentNoteForStream(stream, { openInNewLeaf: true });
+        }
+      });
     });
 
     // Update belonging notes for a specific stream
@@ -177,9 +200,10 @@ export default class ChronolinkerPlugin extends Plugin {
       name: "Update All Belonging Notes for Current File's Stream",
       checkCallback: (checking: boolean) => {
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView) {
+        const activeFile = activeView?.file;
+        if (activeFile) {
           if (!checking) {
-            const stream = findNoteStream(activeView.file, this.settings.noteStreams);
+            const stream = findNoteStream(activeFile, this.settings.noteStreams);
             if (stream && stream.enableBelongingNotes) {
               this.belongingNoteManager.updateAllBelongingNotesForStream(stream);
             } else {
@@ -198,6 +222,9 @@ export default class ChronolinkerPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on('create', (file) => {
         if (file instanceof TFile && file.extension === 'md') {
+          if (this.noteManager.shouldIgnoreCreateEvent(file.path)) {
+            return;
+          }
           this.handleNewNoteCreation(file);
         }
       })
@@ -207,6 +234,9 @@ export default class ChronolinkerPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on('modify', (file) => {
         if (file instanceof TFile && file.extension === 'md') {
+          if (this.noteManager.shouldIgnoreModifyEvent(file.path)) {
+            return;
+          }
           // Check if we need to update links
           this.checkAndUpdateLinks(file);
         }
@@ -231,18 +261,15 @@ export default class ChronolinkerPlugin extends Plugin {
       return;
     }
 
-    // Wait a moment to ensure file is fully created
-    setTimeout(() => {
-      this.noteManager.updateNoteLinks(file, stream);
-      
-      // Find and update previous and next notes if they exist
-      this.updateAdjacentNotes(file, stream);
-      
-      // If belonging notes are enabled, update the belonging note
-      if (stream.enableBelongingNotes) {
-        this.belongingNoteManager.createOrUpdateBelongingNote(file, stream);
-      }
-    }, 500);
+    if (await this.noteManager.discardSafeDuplicatePlaceholder(file, stream)) {
+      return;
+    }
+
+    await this.noteManager.enqueueReconcile(file, stream, {
+      updateBelonging: stream.enableBelongingNotes,
+      interactive: false,
+      reason: 'create-event'
+    });
   }
 
   async checkAndUpdateLinks(file: TFile) {
@@ -251,25 +278,14 @@ export default class ChronolinkerPlugin extends Plugin {
       return;
     }
 
-    // Only update links if auto-linking is enabled for this stream
-    this.noteManager.updateNoteLinks(file, stream);
-  }
-
-  // Helper method to update previous and next notes when a new note is created
-  private async updateAdjacentNotes(file: TFile, stream: NoteStream) {
-    const noteManager = this.noteManager;
-    
-    // Get all notes in the folder
-    const files = this.app.vault.getMarkdownFiles().filter(f => 
-      f.path.startsWith(`${stream.folderPath}/`) && f !== file
-    );
-    
-    // Check each file to see if it should link to our new file
-    for (const otherFile of files) {
-      const otherStream = findNoteStream(otherFile, this.settings.noteStreams);
-      if (otherStream && otherStream.id === stream.id) {
-        noteManager.updateNoteLinks(otherFile, stream);
-      }
+    if (await this.noteManager.discardSafeDuplicatePlaceholder(file, stream)) {
+      return;
     }
+
+    this.noteManager.scheduleReconcile(file, stream, {
+      updateBelonging: false,
+      interactive: false,
+      reason: 'modify-event'
+    });
   }
 }

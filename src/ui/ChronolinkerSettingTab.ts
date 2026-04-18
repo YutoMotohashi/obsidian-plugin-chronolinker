@@ -91,7 +91,8 @@ export class ChronolinkerSettingTab extends PluginSettingTab {
                         belongingNoteFolder: '',
                         belongingNoteType: NoteType.WEEK,
                         belongingNoteDateFormat: 'YYYY-[W]ww',
-                        templatePath: ''
+                        templatePath: '',
+                        belongingTemplatePath: ''
                     };
                     
                     this.plugin.settings.noteStreams.push(newStream);
@@ -311,6 +312,17 @@ export class ChronolinkerSettingTab extends PluginSettingTab {
                     .setPlaceholder('YYYY-[W]ww')
                     .onChange(async (value) => {
                         stream.belongingNoteDateFormat = value;
+                        await this.plugin.saveSettings();
+                    }));
+
+            new Setting(streamEl)
+                .setName('Belonging Template Path')
+                .setDesc('Optional template file for belonging notes; leave empty for blank notes')
+                .addText(text => text
+                    .setValue(stream.belongingTemplatePath || '')
+                    .setPlaceholder('Example: Templates/weekly-note.md')
+                    .onChange(async (value) => {
+                        stream.belongingTemplatePath = value;
                         await this.plugin.saveSettings();
                     }));
         }
