@@ -1,4 +1,4 @@
-import { App, Notice, TFile } from 'obsidian';
+import { App, Notice, TFile, parseYaml } from 'obsidian';
 import moment from 'moment';
 import { NoteStream, NoteType } from '../types';
 import { ensureFolderExists, getChronologySourceForFolderPath, isChronologyNoteFile } from '../utils/fileUtils';
@@ -106,10 +106,10 @@ export class BelongingNoteManager {
         
         const startStr = formatDateForFilename(dateRange.start, stream.dateFormat);
         const endStr = formatDateForFilename(dateRange.end, stream.dateFormat);
-        const cachedFrontmatter = this.app.metadataCache.getFileCache(belongingFile)?.frontmatter ?? {};
-        const currentRange = cachedFrontmatter['date-range'] as { start?: string; end?: string } | undefined;
-        const currentChildren = Array.isArray(cachedFrontmatter['child-notes'])
-            ? cachedFrontmatter['child-notes'].filter((value): value is string => typeof value === 'string')
+        const currentFrontmatter = await this.readFrontmatter(belongingFile);
+        const currentRange = currentFrontmatter['date-range'] as { start?: string; end?: string } | undefined;
+        const currentChildren = Array.isArray(currentFrontmatter['child-notes'])
+            ? currentFrontmatter['child-notes'].filter((value): value is string => typeof value === 'string')
             : [];
         const childNotePaths = rebuildMode === 'conservative'
             ? this.mergeConservativeChildLinks(stream, dateRange.start, dateRange.end, childNotes, currentChildren)
@@ -405,5 +405,25 @@ export class BelongingNoteManager {
 
     private toWikilink(file: TFile): string {
         return `[[${file.path.replace(/\.md$/u, '')}|${file.basename}]]`;
+    }
+
+    private async readFrontmatter(file: TFile): Promise<Record<string, unknown>> {
+        const content = await this.app.vault.read(file);
+        const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*/u);
+        if (!frontmatterMatch) {
+            return {};
+        }
+
+        try {
+            const parsed = parseYaml(frontmatterMatch[1]);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return {};
+            }
+
+            return parsed as Record<string, unknown>;
+        } catch (error) {
+            console.warn(`Chronolinker failed to parse frontmatter for ${file.path}`, error);
+            return {};
+        }
     }
 }

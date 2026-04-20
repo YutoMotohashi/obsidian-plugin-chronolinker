@@ -29,12 +29,14 @@ interface EnsureNoteOptions {
     reconcileIfResolved?: boolean;
     updateBelonging?: boolean;
     interactive?: boolean;
+    managedFieldMode?: 'conservative' | 'authoritative';
 }
 
 interface ReconcileChronologyOptions {
     updateBelonging?: boolean;
     interactive?: boolean;
     reason?: string;
+    managedFieldMode?: 'conservative' | 'authoritative';
 }
 
 export class NoteManager {
@@ -176,7 +178,8 @@ export class NoteManager {
             openInNewLeaf: options.openInNewLeaf,
             reconcileIfResolved: true,
             updateBelonging: true,
-            interactive: true
+            interactive: true,
+            managedFieldMode: 'conservative'
         });
     }
 
@@ -207,7 +210,8 @@ export class NoteManager {
                 await this.enqueueReconcile(resolution.file, stream, {
                     updateBelonging: options.updateBelonging,
                     interactive: options.interactive,
-                    reason: 'ensure-existing'
+                    reason: 'ensure-existing',
+                    managedFieldMode: options.managedFieldMode ?? 'conservative'
                 });
             }
             return resolution.file;
@@ -229,7 +233,8 @@ export class NoteManager {
         await this.enqueueReconcile(file, stream, {
             updateBelonging: options.updateBelonging,
             interactive: options.interactive,
-            reason: 'ensure-created'
+            reason: 'ensure-created',
+            managedFieldMode: options.managedFieldMode ?? 'conservative'
         });
 
         return file;
@@ -280,7 +285,8 @@ export class NoteManager {
             open: true,
             reconcileIfResolved: true,
             updateBelonging: true,
-            interactive: true
+            interactive: true,
+            managedFieldMode: 'conservative'
         });
     }
 
@@ -298,7 +304,8 @@ export class NoteManager {
             open: true,
             reconcileIfResolved: true,
             updateBelonging: true,
-            interactive: true
+            interactive: true,
+            managedFieldMode: 'conservative'
         });
     }
 
@@ -306,7 +313,8 @@ export class NoteManager {
         await this.enqueueReconcile(file, stream, {
             updateBelonging: stream.enableBelongingNotes,
             interactive: false,
-            reason: 'manual-update'
+            reason: 'manual-update',
+            managedFieldMode: 'authoritative'
         });
         new Notice(`Updated chronology for ${file.basename}`);
     }
@@ -334,7 +342,8 @@ export class NoteManager {
             await this.enqueueReconcile(file, stream, {
                 updateBelonging: false,
                 interactive: false,
-                reason: 'bulk-update'
+                reason: 'bulk-update',
+                managedFieldMode: 'authoritative'
             });
             updatedCount += 1;
         }
@@ -382,13 +391,14 @@ export class NoteManager {
             return;
         }
 
-        await this.updateManagedChronologyFields(file, stream, date);
+        const managedFieldMode = options.managedFieldMode ?? 'authoritative';
+        await this.updateManagedChronologyFields(file, stream, date, managedFieldMode);
 
         const adjacentDates = [getPreviousDate(date, stream.noteType), getNextDate(date, stream.noteType)];
         for (const adjacentDate of adjacentDates) {
             const adjacentResolution = this.resolveExistingNote(stream, adjacentDate);
             if (adjacentResolution.status === 'resolved' && adjacentResolution.file) {
-                await this.updateManagedChronologyFields(adjacentResolution.file, stream, adjacentDate);
+                await this.updateManagedChronologyFields(adjacentResolution.file, stream, adjacentDate, managedFieldMode);
             }
         }
 
@@ -401,7 +411,12 @@ export class NoteManager {
         }
     }
 
-    private async updateManagedChronologyFields(file: TFile, stream: NoteStream, date?: moment.Moment): Promise<void> {
+    private async updateManagedChronologyFields(
+        file: TFile,
+        stream: NoteStream,
+        date?: moment.Moment,
+        managedFieldMode: 'conservative' | 'authoritative' = 'authoritative'
+    ): Promise<void> {
         const fileDate = date ?? parseDateFromFilename(file.basename, stream.dateFormat);
         if (!fileDate) {
             return;
@@ -424,11 +439,21 @@ export class NoteManager {
             ? this.toWikilink(nextResolution.file)
             : undefined;
 
-        const cachedFrontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
-        const currentPrevious = cachedFrontmatter[stream.beforeFieldName];
-        const currentNext = cachedFrontmatter[stream.afterFieldName];
-        const shouldChangePrevious = this.shouldUpdateManagedField(currentPrevious, desiredPrevious, stream.overwriteExisting);
-        const shouldChangeNext = this.shouldUpdateManagedField(currentNext, desiredNext, stream.overwriteExisting);
+        const currentFrontmatter = await this.readFrontmatter(file);
+        const currentPrevious = currentFrontmatter[stream.beforeFieldName];
+        const currentNext = currentFrontmatter[stream.afterFieldName];
+        const shouldChangePrevious = this.shouldUpdateManagedField(
+            currentPrevious,
+            desiredPrevious,
+            stream.overwriteExisting,
+            managedFieldMode
+        );
+        const shouldChangeNext = this.shouldUpdateManagedField(
+            currentNext,
+            desiredNext,
+            stream.overwriteExisting,
+            managedFieldMode
+        );
 
         if (!shouldChangePrevious && !shouldChangeNext) {
             return;
@@ -444,7 +469,16 @@ export class NoteManager {
         });
     }
 
-    private shouldUpdateManagedField(existingValue: unknown, desiredValue: string | undefined, overwriteExisting: boolean): boolean {
+    private shouldUpdateManagedField(
+        existingValue: unknown,
+        desiredValue: string | undefined,
+        overwriteExisting: boolean,
+        managedFieldMode: 'conservative' | 'authoritative'
+    ): boolean {
+        if (managedFieldMode === 'conservative' && desiredValue === undefined) {
+            return false;
+        }
+
         if (overwriteExisting) {
             return existingValue !== desiredValue;
         }
@@ -474,6 +508,26 @@ export class NoteManager {
             updater(frontmatter as Record<string, unknown>);
         });
         this.markIgnored(this.ignoredModifyPaths, file.path);
+    }
+
+    private async readFrontmatter(file: TFile): Promise<Record<string, unknown>> {
+        const content = await this.app.vault.read(file);
+        const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*/u);
+        if (!frontmatterMatch) {
+            return {};
+        }
+
+        try {
+            const parsed = parseYaml(frontmatterMatch[1]);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return {};
+            }
+
+            return parsed as Record<string, unknown>;
+        } catch (error) {
+            console.warn(`Chronolinker failed to parse frontmatter for ${file.path}`, error);
+            return {};
+        }
     }
 
     private async createNote(stream: NoteStream, date: moment.Moment, noteName: string): Promise<TFile> {

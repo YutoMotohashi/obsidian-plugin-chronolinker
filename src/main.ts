@@ -268,7 +268,8 @@ export default class ChronolinkerPlugin extends Plugin {
     await this.noteManager.enqueueReconcile(file, stream, {
       updateBelonging: stream.enableBelongingNotes,
       interactive: false,
-      reason: 'create-event'
+      reason: 'create-event',
+      managedFieldMode: 'conservative'
     });
   }
 
@@ -285,7 +286,8 @@ export default class ChronolinkerPlugin extends Plugin {
     this.noteManager.scheduleReconcile(file, stream, {
       updateBelonging: false,
       interactive: false,
-      reason: 'modify-event'
+      reason: 'modify-event',
+      managedFieldMode: 'conservative'
     });
   }
 }
