@@ -13,6 +13,7 @@ import { processTemplateVariables } from '../utils/templateUtils';
 interface ReconcileBelongingOptions {
     notifyOnConflict?: boolean;
     openAfterUpdate?: boolean;
+    rebuildMode?: 'conservative' | 'authoritative';
 }
 
 interface BelongingResolution {
@@ -64,7 +65,7 @@ export class BelongingNoteManager {
             ? resolution.file
             : await this.createBelongingNote(belongingNoteName, belongingFolder, belongingDate, stream);
 
-        await this.updateBelongingNoteContent(belongingFile, stream);
+        await this.updateBelongingNoteContent(belongingFile, stream, options.rebuildMode ?? 'authoritative');
 
         if (options.openAfterUpdate) {
             await this.app.workspace.openLinkText(belongingFile.path, '', false);
@@ -81,11 +82,16 @@ export class BelongingNoteManager {
 
         await this.reconcileForChild(file, stream, {
             notifyOnConflict: true,
-            openAfterUpdate: true
+            openAfterUpdate: true,
+            rebuildMode: 'authoritative'
         });
     }
 
-    async updateBelongingNoteContent(belongingFile: TFile, stream: NoteStream): Promise<void> {
+    async updateBelongingNoteContent(
+        belongingFile: TFile,
+        stream: NoteStream,
+        rebuildMode: 'conservative' | 'authoritative' = 'authoritative'
+    ): Promise<void> {
         const belongingDate = parseDateFromFilename(belongingFile.basename, stream.belongingNoteDateFormat);
         if (!belongingDate) {
             return;
@@ -100,11 +106,14 @@ export class BelongingNoteManager {
         
         const startStr = formatDateForFilename(dateRange.start, stream.dateFormat);
         const endStr = formatDateForFilename(dateRange.end, stream.dateFormat);
-        const childNotePaths = childNotes.map(file => `[[${file.path.replace(/\.md$/u, '')}|${file.basename}]]`);
         const cachedFrontmatter = this.app.metadataCache.getFileCache(belongingFile)?.frontmatter ?? {};
-
         const currentRange = cachedFrontmatter['date-range'] as { start?: string; end?: string } | undefined;
-        const currentChildren = Array.isArray(cachedFrontmatter['child-notes']) ? cachedFrontmatter['child-notes'] : [];
+        const currentChildren = Array.isArray(cachedFrontmatter['child-notes'])
+            ? cachedFrontmatter['child-notes'].filter((value): value is string => typeof value === 'string')
+            : [];
+        const childNotePaths = rebuildMode === 'conservative'
+            ? this.mergeConservativeChildLinks(stream, dateRange.start, dateRange.end, childNotes, currentChildren)
+            : childNotes.map(file => this.toWikilink(file));
         const childrenChanged = JSON.stringify(currentChildren) !== JSON.stringify(childNotePaths);
         const rangeChanged = currentRange?.start !== startStr || currentRange?.end !== endStr;
 
@@ -155,7 +164,7 @@ export class BelongingNoteManager {
                 ? resolution.file
                 : await this.createBelongingNote(belongingNoteName, belongingFolder, belongingDate, stream);
 
-            await this.updateBelongingNoteContent(belongingFile, stream);
+            await this.updateBelongingNoteContent(belongingFile, stream, 'authoritative');
             updatedCount += 1;
         }
 
@@ -224,6 +233,116 @@ export class BelongingNoteManager {
             });
     }
 
+    private mergeConservativeChildLinks(
+        stream: NoteStream,
+        startDate: moment.Moment,
+        endDate: moment.Moment,
+        childNotes: TFile[],
+        currentChildren: string[]
+    ): string[] {
+        const entries = new Map<string, { date: moment.Moment; link: string; path: string }>();
+
+        for (const file of childNotes) {
+            const date = parseDateFromFilename(file.basename, stream.dateFormat);
+            if (!date) {
+                continue;
+            }
+
+            entries.set(file.basename, {
+                date,
+                link: this.toWikilink(file),
+                path: file.path
+            });
+        }
+
+        for (const existingLink of currentChildren) {
+            const parsedExisting = this.parseChildLink(existingLink, stream);
+            if (!parsedExisting || entries.has(parsedExisting.basename)) {
+                continue;
+            }
+
+            const resolvedFile = this.resolveChildNoteInRange(stream, parsedExisting.basename, startDate, endDate);
+            if (!resolvedFile) {
+                continue;
+            }
+
+            const resolvedDate = parseDateFromFilename(resolvedFile.basename, stream.dateFormat);
+            if (!resolvedDate) {
+                continue;
+            }
+
+            entries.set(resolvedFile.basename, {
+                date: resolvedDate,
+                link: this.toWikilink(resolvedFile),
+                path: resolvedFile.path
+            });
+        }
+
+        return Array.from(entries.entries())
+            .sort((left, right) => {
+                const byDate = left[1].date.valueOf() - right[1].date.valueOf();
+                if (byDate !== 0) {
+                    return byDate;
+                }
+
+                return left[1].path.localeCompare(right[1].path);
+            })
+            .map(([, entry]) => entry.link);
+    }
+
+    private parseChildLink(
+        value: string,
+        stream: NoteStream
+    ): { basename: string; date: moment.Moment } | null {
+        const match = value.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/u);
+        if (!match) {
+            return null;
+        }
+
+        const basename = match[1].split('/').pop()?.replace(/\.md$/u, '');
+        if (!basename) {
+            return null;
+        }
+
+        const date = parseDateFromFilename(basename, stream.dateFormat);
+        if (!date) {
+            return null;
+        }
+
+        return { basename, date };
+    }
+
+    private resolveChildNoteInRange(
+        stream: NoteStream,
+        noteName: string,
+        startDate: moment.Moment,
+        endDate: moment.Moment
+    ): TFile | null {
+        const candidates = this.app.vault
+            .getMarkdownFiles()
+            .filter(file => file.basename === noteName && isChronologyNoteFile(file, stream))
+            .filter(file => {
+                const date = parseDateFromFilename(file.basename, stream.dateFormat);
+                return !!date && !date.isBefore(startDate) && !date.isAfter(endDate);
+            })
+            .sort((left, right) => {
+                const leftSource = getChronologySourceForFolderPath(left.path, stream.folderPath, stream.noteType);
+                const rightSource = getChronologySourceForFolderPath(right.path, stream.folderPath, stream.noteType);
+
+                if (leftSource !== rightSource) {
+                    return leftSource === 'root' ? -1 : 1;
+                }
+
+                return left.path.localeCompare(right.path);
+            });
+
+        if (candidates.length !== 1) {
+            return null;
+        }
+
+        return candidates[0];
+    }
+
     private resolveBelongingNote(
         belongingFolder: string,
         belongingNoteName: string,
@@ -282,5 +401,9 @@ export class BelongingNoteManager {
         }
 
         return this.app.vault.create(belongingNotePath, initialContent);
+    }
+
+    private toWikilink(file: TFile): string {
+        return `[[${file.path.replace(/\.md$/u, '')}|${file.basename}]]`;
     }
 }

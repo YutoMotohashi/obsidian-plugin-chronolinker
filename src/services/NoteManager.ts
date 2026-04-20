@@ -395,7 +395,8 @@ export class NoteManager {
         if (options.updateBelonging !== false && stream.enableBelongingNotes && this.belongingNoteManager) {
             await this.belongingNoteManager.reconcileForChild(file, stream, {
                 notifyOnConflict: options.interactive === true,
-                openAfterUpdate: false
+                openAfterUpdate: false,
+                rebuildMode: 'conservative'
             });
         }
     }
