@@ -1,21 +1,276 @@
-import { App, Notice, TFile } from 'obsidian';
+import { App, Notice, TFile, parseYaml } from 'obsidian';
 import moment from 'moment';
-import { NoteStream } from '../types';
-import { ensureFolderExists } from '../utils/fileUtils';
+import { NoteStream, NoteType } from '../types';
+import {
+    ensureFolderExists,
+    getChronologySourceForFolderPath,
+    isChronologyNoteFile
+} from '../utils/fileUtils';
 import { formatDateForFilename, getNextDate, getPreviousDate, parseDateFromFilename } from '../utils/dateUtils';
 import { processTemplateVariables } from '../utils/templateUtils';
+import { BelongingNoteManager } from './BelongingNoteManager';
+
+type ResolutionStatus = 'resolved' | 'missing' | 'conflict';
+type ResolutionSource = 'root' | 'archive';
+
+interface ResolveExistingNoteResult {
+    status: ResolutionStatus;
+    noteName: string;
+    file?: TFile;
+    source?: ResolutionSource;
+    candidates?: TFile[];
+}
+
+interface EnsureNoteOptions {
+    createIfMissing?: boolean;
+    promptBeforeCreate?: boolean;
+    open?: boolean;
+    openInNewLeaf?: boolean;
+    reconcileIfResolved?: boolean;
+    updateBelonging?: boolean;
+    interactive?: boolean;
+    managedFieldMode?: 'conservative' | 'authoritative';
+}
+
+interface ReconcileChronologyOptions {
+    updateBelonging?: boolean;
+    interactive?: boolean;
+    reason?: string;
+    managedFieldMode?: 'conservative' | 'authoritative';
+}
 
 export class NoteManager {
     private app: App;
-    private isUpdating: boolean = false;
-    
+    private belongingNoteManager: BelongingNoteManager | null = null;
+    private streamQueues = new Map<string, Promise<void>>();
+    private scheduledReconciles = new Map<string, ReturnType<typeof setTimeout>>();
+    private ignoredCreatePaths = new Map<string, number>();
+    private ignoredModifyPaths = new Map<string, number>();
+
     constructor(app: App) {
         this.app = app;
     }
-    
-    /**
-     * Navigate to the previous note in the chronological sequence
-     */
+
+    setBelongingNoteManager(manager: BelongingNoteManager): void {
+        this.belongingNoteManager = manager;
+    }
+
+    shouldIgnoreCreateEvent(path: string): boolean {
+        return this.shouldIgnoreEvent(this.ignoredCreatePaths, path);
+    }
+
+    shouldIgnoreModifyEvent(path: string): boolean {
+        return this.shouldIgnoreEvent(this.ignoredModifyPaths, path);
+    }
+
+    async discardSafeDuplicatePlaceholder(file: TFile, stream: NoteStream): Promise<boolean> {
+        const date = parseDateFromFilename(file.basename, stream.dateFormat);
+        if (!date) {
+            return false;
+        }
+
+        const resolution = this.resolveExistingNote(stream, date);
+        if (resolution.status !== 'conflict' || !resolution.candidates?.some(candidate => candidate.path === file.path)) {
+            return false;
+        }
+
+        const currentSource = getChronologySourceForFolderPath(file.path, stream.folderPath, stream.noteType);
+        if (currentSource !== 'root') {
+            return false;
+        }
+
+        const remainingCandidates = resolution.candidates.filter(candidate => candidate.path !== file.path);
+        if (remainingCandidates.length !== 1) {
+            return false;
+        }
+
+        const canonicalCandidate = remainingCandidates[0];
+        const canonicalSource = getChronologySourceForFolderPath(canonicalCandidate.path, stream.folderPath, stream.noteType);
+        if (canonicalSource !== 'archive') {
+            return false;
+        }
+
+        const content = await this.app.vault.read(file);
+        if (!this.isSafeDuplicatePlaceholderContent(content, stream)) {
+            return false;
+        }
+
+        const scheduledTimer = this.scheduledReconciles.get(file.path);
+        if (scheduledTimer) {
+            clearTimeout(scheduledTimer);
+            this.scheduledReconciles.delete(file.path);
+        }
+
+        console.warn(
+            `Chronolinker discarded placeholder duplicate ${file.path} in favor of archived note ${canonicalCandidate.path}`
+        );
+        await this.app.vault.delete(file);
+        return true;
+    }
+
+    scheduleReconcile(
+        file: TFile,
+        stream: NoteStream,
+        options: ReconcileChronologyOptions = {},
+        delayMs = 750
+    ): void {
+        const existingTimer = this.scheduledReconciles.get(file.path);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+
+        const timer = setTimeout(() => {
+            this.scheduledReconciles.delete(file.path);
+            void this.enqueueReconcile(file, stream, options);
+        }, delayMs);
+
+        this.scheduledReconciles.set(file.path, timer);
+    }
+
+    listChronologyFiles(stream: NoteStream): TFile[] {
+        return this.app.vault
+            .getMarkdownFiles()
+            .filter(file => isChronologyNoteFile(file, stream))
+            .sort((left, right) => {
+                const leftDate = parseDateFromFilename(left.basename, stream.dateFormat);
+                const rightDate = parseDateFromFilename(right.basename, stream.dateFormat);
+
+                if (leftDate && rightDate) {
+                    const byDate = leftDate.valueOf() - rightDate.valueOf();
+                    if (byDate !== 0) {
+                        return byDate;
+                    }
+                }
+
+                return left.path.localeCompare(right.path);
+            });
+    }
+
+    resolveExistingNote(stream: NoteStream, date: moment.Moment): ResolveExistingNoteResult {
+        const normalizedDate = this.normalizeDateForNoteType(date, stream.noteType);
+        const noteName = formatDateForFilename(normalizedDate, stream.dateFormat);
+        const candidates = this.getCandidatesForNoteName(stream, noteName);
+
+        if (candidates.length === 0) {
+            return { status: 'missing', noteName };
+        }
+
+        if (candidates.length > 1) {
+            return { status: 'conflict', noteName, candidates };
+        }
+
+        const file = candidates[0];
+        const source = getChronologySourceForFolderPath(file.path, stream.folderPath, stream.noteType);
+
+        return {
+            status: 'resolved',
+            noteName,
+            file,
+            source: source === 'archive' ? 'archive' : 'root'
+        };
+    }
+
+    async openCurrentNoteForStream(stream: NoteStream, options: Pick<EnsureNoteOptions, 'openInNewLeaf'> = {}): Promise<void> {
+        const currentDate = this.getCurrentPeriodDate(stream.noteType);
+        await this.openNoteForDate(stream, currentDate, {
+            createIfMissing: true,
+            open: true,
+            openInNewLeaf: options.openInNewLeaf,
+            reconcileIfResolved: true,
+            updateBelonging: true,
+            interactive: true,
+            managedFieldMode: 'conservative'
+        });
+    }
+
+    async openNoteForDate(stream: NoteStream, date: moment.Moment, options: EnsureNoteOptions = {}): Promise<TFile | null> {
+        const file = await this.ensureNote(stream, date, {
+            ...options,
+            open: false
+        });
+
+        if (file && options.open !== false) {
+            await this.app.workspace.openLinkText(file.path, '', options.openInNewLeaf === true);
+        }
+
+        return file;
+    }
+
+    async ensureNote(stream: NoteStream, date: moment.Moment, options: EnsureNoteOptions = {}): Promise<TFile | null> {
+        const normalizedDate = this.normalizeDateForNoteType(date, stream.noteType);
+        const resolution = this.resolveExistingNote(stream, normalizedDate);
+
+        if (resolution.status === 'conflict') {
+            this.reportConflict(stream, resolution, options.interactive === true);
+            return null;
+        }
+
+        if (resolution.status === 'resolved' && resolution.file) {
+            if (options.reconcileIfResolved) {
+                await this.enqueueReconcile(resolution.file, stream, {
+                    updateBelonging: options.updateBelonging,
+                    interactive: options.interactive,
+                    reason: 'ensure-existing',
+                    managedFieldMode: options.managedFieldMode ?? 'conservative'
+                });
+            }
+            return resolution.file;
+        }
+
+        if (options.createIfMissing === false) {
+            return null;
+        }
+
+        const createNote = options.promptBeforeCreate === true
+            ? confirm(`Note ${resolution.noteName}.md does not exist. Create it?`)
+            : true;
+
+        if (!createNote) {
+            return null;
+        }
+
+        const file = await this.createNote(stream, normalizedDate, resolution.noteName);
+        await this.enqueueReconcile(file, stream, {
+            updateBelonging: options.updateBelonging,
+            interactive: options.interactive,
+            reason: 'ensure-created',
+            managedFieldMode: options.managedFieldMode ?? 'conservative'
+        });
+
+        return file;
+    }
+
+    async ensureNoteRange(
+        stream: NoteStream,
+        startDate: moment.Moment,
+        count: number,
+        options: EnsureNoteOptions = {}
+    ): Promise<TFile[]> {
+        const total = Math.max(0, Math.floor(count));
+        if (total === 0) {
+            return [];
+        }
+
+        const files: TFile[] = [];
+        let currentDate = this.normalizeDateForNoteType(startDate, stream.noteType);
+
+        for (let index = 0; index < total; index += 1) {
+            const file = await this.ensureNote(stream, currentDate, {
+                ...options,
+                open: false,
+                promptBeforeCreate: false
+            });
+
+            if (file) {
+                files.push(file);
+            }
+
+            currentDate = getNextDate(currentDate, stream.noteType);
+        }
+
+        return files;
+    }
+
     async navigateToPreviousNote(file: TFile, stream: NoteStream): Promise<void> {
         const date = parseDateFromFilename(file.basename, stream.dateFormat);
         if (!date) {
@@ -23,30 +278,18 @@ export class NoteManager {
             return;
         }
 
-        // Find the previous note date based on the note type
-        const prevDate = getPreviousDate(date, stream.noteType);
-        
-        // Find or create the previous note
-        const prevNoteName = formatDateForFilename(prevDate, stream.dateFormat);
-        const prevNotePath = `${stream.folderPath}/${prevNoteName}.md`;
-        
-        const prevFile = this.app.vault.getAbstractFileByPath(prevNotePath);
-        
-        if (prevFile instanceof TFile) {
-            await this.app.workspace.openLinkText(prevFile.path, '', false);
-        } else {
-            // Ask if the user wants to create the note
-            const createNote = confirm(`Note ${prevNoteName}.md does not exist. Create it?`);
-            
-            if (createNote) {
-                await this.createNewNote(stream, prevDate);
-            }
-        }
+        const previousDate = getPreviousDate(date, stream.noteType);
+        await this.openNoteForDate(stream, previousDate, {
+            createIfMissing: true,
+            promptBeforeCreate: true,
+            open: true,
+            reconcileIfResolved: true,
+            updateBelonging: true,
+            interactive: true,
+            managedFieldMode: 'conservative'
+        });
     }
 
-    /**
-     * Navigate to the next note in the chronological sequence
-     */
     async navigateToNextNote(file: TFile, stream: NoteStream): Promise<void> {
         const date = parseDateFromFilename(file.basename, stream.dateFormat);
         if (!date) {
@@ -54,297 +297,365 @@ export class NoteManager {
             return;
         }
 
-        // Find the next note date based on the note type
         const nextDate = getNextDate(date, stream.noteType);
-        
-        // Find or create the next note
-        const nextNoteName = formatDateForFilename(nextDate, stream.dateFormat);
-        const nextNotePath = `${stream.folderPath}/${nextNoteName}.md`;
-        
-        const nextFile = this.app.vault.getAbstractFileByPath(nextNotePath);
-        
-        if (nextFile instanceof TFile) {
-            await this.app.workspace.openLinkText(nextFile.path, '', false);
-        } else {
-            // Ask if the user wants to create the note
-            const createNote = confirm(`Note ${nextNoteName}.md does not exist. Create it?`);
-            
-            if (createNote) {
-                await this.createNewNote(stream, nextDate);
-            }
+        await this.openNoteForDate(stream, nextDate, {
+            createIfMissing: true,
+            promptBeforeCreate: true,
+            open: true,
+            reconcileIfResolved: true,
+            updateBelonging: true,
+            interactive: true,
+            managedFieldMode: 'conservative'
+        });
+    }
+
+    async updateNoteLinks(file: TFile, stream: NoteStream): Promise<void> {
+        await this.enqueueReconcile(file, stream, {
+            updateBelonging: stream.enableBelongingNotes,
+            interactive: false,
+            reason: 'manual-update',
+            managedFieldMode: 'authoritative'
+        });
+        new Notice(`Updated chronology for ${file.basename}`);
+    }
+
+    async handleNoteRename(file: TFile, oldPath: string, noteStreams: NoteStream[]): Promise<void> {
+        const affectedStreams = noteStreams.filter(stream =>
+            oldPath.startsWith(`${stream.folderPath}/`) || file.path.startsWith(`${stream.folderPath}/`)
+        );
+
+        for (const stream of affectedStreams) {
+            await this.updateAllNoteLinks(stream);
         }
     }
 
-    /**
-     * Update the chronological links in a note
-     */
-    async updateNoteLinks(file: TFile, stream: NoteStream): Promise<void> {
-        // Prevent recursive updates
-        if (this.isUpdating) {
+    async updateAllNoteLinks(stream: NoteStream): Promise<void> {
+        const files = this.listChronologyFiles(stream);
+
+        if (files.length === 0) {
+            new Notice(`No chronology notes found in ${stream.folderPath}`);
             return;
         }
 
-        // Validate inputs
-        if (!file || !stream) {
-            new Notice('Error: Invalid file or stream');
-            return;
+        let updatedCount = 0;
+        for (const file of files) {
+            await this.enqueueReconcile(file, stream, {
+                updateBelonging: false,
+                interactive: false,
+                reason: 'bulk-update',
+                managedFieldMode: 'authoritative'
+            });
+            updatedCount += 1;
         }
 
-        if (!stream.folderPath) {
-            new Notice(`Error: Stream folder path is not specified for ${stream.name || 'unnamed stream'}`);
-            return;
-        }
+        new Notice(`Updated ${updatedCount} notes in stream: ${stream.name || stream.folderPath}`);
+    }
 
-        // Validate file date format
-        const date = parseDateFromFilename(file.basename, stream.dateFormat);
-        if (!date) {
-            new Notice(`Error: Could not parse date from filename ${file.basename} using format ${stream.dateFormat}`);
-            return;
-        }
-
-        // Set the updating flag to prevent recursive updates
-        this.isUpdating = true;
-        let hasError = false;
-        
-        try {
-            // Find previous and next notes
-            const prevDate = getPreviousDate(date, stream.noteType);
-            const nextDate = getNextDate(date, stream.noteType);
-            
-            if (!prevDate || !nextDate) {
-                new Notice(`Error: Failed to calculate previous or next date for ${file.basename}`);
-                hasError = true;
-                return;
-            }
-
-            const prevNoteName = formatDateForFilename(prevDate, stream.dateFormat);
-            const nextNoteName = formatDateForFilename(nextDate, stream.dateFormat);
-            
-            if (!prevNoteName || !nextNoteName) {
-                new Notice(`Error: Failed to format date for filenames`);
-                hasError = true;
-                return;
-            }
-            
-            // Update frontmatter
-            await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-                try {
-                    // Handle previous note links
-                    if (stream.overwriteExisting || !frontmatter[stream.beforeFieldName]) {
-                        // Check if the previous note exists
-                        let prevNotePath = `${stream.folderPath}/${prevNoteName}.md`;
-                        const allFiles = this.app.vault.getMarkdownFiles();
-                        
-                        // Check if a file with the same basename already exists in the folder
-                        for (const f of allFiles) {
-                            if (f.basename === prevNoteName && f.path.startsWith(`${stream.folderPath}/`)) {
-                                prevNotePath = f.path;
-                                break;
-                            }
-                        }
-
-                        const prevNoteExists = this.app.vault.getAbstractFileByPath(prevNotePath) instanceof TFile;
-                        
-                        if (prevNoteExists) {
-                            frontmatter[stream.beforeFieldName] = `[[${prevNotePath}|${prevNoteName}]]`;
-                        } else {
-                            // Remove the field if the note doesn't exist
-                            if (frontmatter[stream.beforeFieldName]) {
-                                delete frontmatter[stream.beforeFieldName];
-                            }
-                        }
-                    }
-                    
-                    // Handle next note links
-                    if (stream.overwriteExisting || !frontmatter[stream.afterFieldName]) {
-                        // Check if the next note exists
-                        let nextNotePath = `${stream.folderPath}/${nextNoteName}.md`;
-                        const allFiles = this.app.vault.getMarkdownFiles();
-
-                        // Check if a file with the same basename already exists in the folder
-                        for (const f of allFiles) {
-                            if (f.basename === nextNoteName && f.path.startsWith(`${stream.folderPath}/`)) {
-                                nextNotePath = f.path;
-                                break;
-                            }
-                        }
-
-                        const nextNoteExists = this.app.vault.getAbstractFileByPath(nextNotePath) instanceof TFile;
-                        
-                        if (nextNoteExists) {
-                            frontmatter[stream.afterFieldName] = `[[${nextNotePath}|${nextNoteName}]]`;
-                        } else {
-                            // Remove the field if the note doesn't exist
-                            if (frontmatter[stream.afterFieldName]) {
-                                delete frontmatter[stream.afterFieldName];
-                            }
-                        }
-                    }
-                    return true; // Indicate changes were made
-                } catch (frontmatterError) {
-                    console.error('Error updating frontmatter:', frontmatterError);
-                    hasError = true;
-                    return false; // Indicate no changes should be made
-                }
-            }).catch(error => {
-                console.error('Failed to process frontmatter:', error);
-                hasError = true;
-                new Notice(`Error updating ${file.basename}: ${error.message}`);
+    async enqueueReconcile(file: TFile, stream: NoteStream, options: ReconcileChronologyOptions = {}): Promise<void> {
+        const queueKey = stream.id || stream.folderPath;
+        const previous = this.streamQueues.get(queueKey) ?? Promise.resolve();
+        const next = previous
+            .catch(error => {
+                console.error(`Chronolinker queue recovered after error in ${stream.name || stream.folderPath}:`, error);
+            })
+            .then(async () => {
+                await this.reconcileChronology(file, stream, options);
             });
 
-            if (!hasError) {
-                new Notice(`Successfully updated links for ${file.basename}`);
-            }
-        } catch (error) {
-            console.error(`Error updating links for ${file.basename}:`, error);
-            hasError = true;
-            new Notice(`Error updating links for ${file.basename}: ${error.message}`);
+        this.streamQueues.set(queueKey, next);
+
+        try {
+            await next;
         } finally {
-            // Reset the flag regardless of success or error
-            this.isUpdating = false;
+            if (this.streamQueues.get(queueKey) === next) {
+                this.streamQueues.delete(queueKey);
+            }
         }
     }
 
-    /**
-     * Handle file rename events to update references in other notes
-     */
-    async handleNoteRename(file: TFile, oldPath: string, noteStreams: NoteStream[]): Promise<void> {
-        // Get all configured streams
-        for (const stream of noteStreams) {
-            // Check if the old path was in the stream's folder
-            if (!oldPath.startsWith(`${stream.folderPath}/`)) {
-                continue;
+    private async reconcileChronology(file: TFile, stream: NoteStream, options: ReconcileChronologyOptions): Promise<void> {
+        if (!isChronologyNoteFile(file, stream)) {
+            return;
+        }
+
+        const date = parseDateFromFilename(file.basename, stream.dateFormat);
+        if (!date) {
+            return;
+        }
+
+        const selfResolution = this.resolveExistingNote(stream, date);
+        if (selfResolution.status !== 'resolved' || !selfResolution.file || selfResolution.file.path !== file.path) {
+            if (selfResolution.status === 'conflict') {
+                console.warn(`Chronolinker skipped reconcile for conflicting note ${file.path}`, selfResolution.candidates);
             }
-            
-            // Get all notes in the folder
-            const files = this.app.vault.getMarkdownFiles().filter(f => 
-                f.path.startsWith(`${stream.folderPath}/`) 
-            );
-            
-            // Update any references to the old filename in frontmatter
-            const oldBasename = oldPath.split('/').pop()?.split('.')[0];
-            
-            if (oldBasename) {
-                for (const noteFile of files) {
-                    await this.app.fileManager.processFrontMatter(noteFile, (frontmatter) => {
-                        let updated = false;
-                        
-                        // Check before field
-                        if (frontmatter[stream.beforeFieldName]?.includes(oldBasename)) {
-                            frontmatter[stream.beforeFieldName] = frontmatter[stream.beforeFieldName].replace(
-                                `[[${oldBasename}]]`, 
-                                `[[${file.basename}]]`
-                            );
-                            updated = true;
-                        }
-                        
-                        // Check after field
-                        if (frontmatter[stream.afterFieldName]?.includes(oldBasename)) {
-                            frontmatter[stream.afterFieldName] = frontmatter[stream.afterFieldName].replace(
-                                `[[${oldBasename}]]`, 
-                                `[[${file.basename}]]`
-                            );
-                            updated = true;
-                        }
-                        
-                        return updated;
-                    });
-                }
+            return;
+        }
+
+        const managedFieldMode = options.managedFieldMode ?? 'authoritative';
+        await this.updateManagedChronologyFields(file, stream, date, managedFieldMode);
+
+        const adjacentDates = [getPreviousDate(date, stream.noteType), getNextDate(date, stream.noteType)];
+        for (const adjacentDate of adjacentDates) {
+            const adjacentResolution = this.resolveExistingNote(stream, adjacentDate);
+            if (adjacentResolution.status === 'resolved' && adjacentResolution.file) {
+                await this.updateManagedChronologyFields(adjacentResolution.file, stream, adjacentDate, managedFieldMode);
             }
+        }
+
+        if (options.updateBelonging !== false && stream.enableBelongingNotes && this.belongingNoteManager) {
+            await this.belongingNoteManager.reconcileForChild(file, stream, {
+                notifyOnConflict: options.interactive === true,
+                openAfterUpdate: false,
+                rebuildMode: 'conservative'
+            });
         }
     }
-    
-    /**
-     * Create a new note for a stream and date
-     */
-    async createNewNote(stream: NoteStream, date: moment.Moment): Promise<TFile | null> {
-        // Ensure the folder exists
-        await ensureFolderExists(this.app, stream.folderPath);
-        
-        // Create the filename
-        const filename = formatDateForFilename(date, stream.dateFormat);
-        const filePath = `${stream.folderPath}/${filename}.md`;
-        
-        // Check if the file already exists
-        if (this.app.vault.getAbstractFileByPath(filePath)) {
-            new Notice(`Note ${filename}.md already exists`);
-            return null;
+
+    private async updateManagedChronologyFields(
+        file: TFile,
+        stream: NoteStream,
+        date?: moment.Moment,
+        managedFieldMode: 'conservative' | 'authoritative' = 'authoritative'
+    ): Promise<void> {
+        const fileDate = date ?? parseDateFromFilename(file.basename, stream.dateFormat);
+        if (!fileDate) {
+            return;
         }
-        
-        // Create initial content for the note
+
+        const previousResolution = this.resolveExistingNote(stream, getPreviousDate(fileDate, stream.noteType));
+        const nextResolution = this.resolveExistingNote(stream, getNextDate(fileDate, stream.noteType));
+
+        if (previousResolution.status === 'conflict') {
+            console.warn(`Chronolinker found conflicting previous note candidates for ${file.path}`, previousResolution.candidates);
+        }
+        if (nextResolution.status === 'conflict') {
+            console.warn(`Chronolinker found conflicting next note candidates for ${file.path}`, nextResolution.candidates);
+        }
+
+        const desiredPrevious = previousResolution.status === 'resolved' && previousResolution.file
+            ? this.toWikilink(previousResolution.file)
+            : undefined;
+        const desiredNext = nextResolution.status === 'resolved' && nextResolution.file
+            ? this.toWikilink(nextResolution.file)
+            : undefined;
+
+        const currentFrontmatter = await this.readFrontmatter(file);
+        const currentPrevious = currentFrontmatter[stream.beforeFieldName];
+        const currentNext = currentFrontmatter[stream.afterFieldName];
+        const shouldChangePrevious = this.shouldUpdateManagedField(
+            currentPrevious,
+            desiredPrevious,
+            stream.overwriteExisting,
+            managedFieldMode
+        );
+        const shouldChangeNext = this.shouldUpdateManagedField(
+            currentNext,
+            desiredNext,
+            stream.overwriteExisting,
+            managedFieldMode
+        );
+
+        if (!shouldChangePrevious && !shouldChangeNext) {
+            return;
+        }
+
+        await this.processManagedFrontmatter(file, frontmatter => {
+            if (shouldChangePrevious) {
+                this.applyManagedFieldValue(frontmatter, stream.beforeFieldName, desiredPrevious);
+            }
+            if (shouldChangeNext) {
+                this.applyManagedFieldValue(frontmatter, stream.afterFieldName, desiredNext);
+            }
+        });
+    }
+
+    private shouldUpdateManagedField(
+        existingValue: unknown,
+        desiredValue: string | undefined,
+        overwriteExisting: boolean,
+        managedFieldMode: 'conservative' | 'authoritative'
+    ): boolean {
+        if (managedFieldMode === 'conservative' && desiredValue === undefined) {
+            return false;
+        }
+
+        if (overwriteExisting) {
+            return existingValue !== desiredValue;
+        }
+
+        if (existingValue === undefined) {
+            return desiredValue !== undefined;
+        }
+
+        return false;
+    }
+
+    private applyManagedFieldValue(frontmatter: Record<string, unknown>, fieldName: string, value: string | undefined): void {
+        if (value === undefined) {
+            delete frontmatter[fieldName];
+            return;
+        }
+
+        frontmatter[fieldName] = value;
+    }
+
+    private async processManagedFrontmatter(
+        file: TFile,
+        updater: (frontmatter: Record<string, unknown>) => void
+    ): Promise<void> {
+        this.markIgnored(this.ignoredModifyPaths, file.path);
+        await this.app.fileManager.processFrontMatter(file, frontmatter => {
+            updater(frontmatter as Record<string, unknown>);
+        });
+        this.markIgnored(this.ignoredModifyPaths, file.path);
+    }
+
+    private async readFrontmatter(file: TFile): Promise<Record<string, unknown>> {
+        const content = await this.app.vault.read(file);
+        const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*/u);
+        if (!frontmatterMatch) {
+            return {};
+        }
+
+        try {
+            const parsed = parseYaml(frontmatterMatch[1]);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return {};
+            }
+
+            return parsed as Record<string, unknown>;
+        } catch (error) {
+            console.warn(`Chronolinker failed to parse frontmatter for ${file.path}`, error);
+            return {};
+        }
+    }
+
+    private async createNote(stream: NoteStream, date: moment.Moment, noteName: string): Promise<TFile> {
+        await ensureFolderExists(this.app, stream.folderPath);
+
+        const filePath = `${stream.folderPath}/${noteName}.md`;
         let initialContent = '';
-        
-        // Try to use a template if specified
+
         if (stream.templatePath) {
             const templateFile = this.app.vault.getAbstractFileByPath(stream.templatePath);
             if (templateFile instanceof TFile) {
                 initialContent = await this.app.vault.read(templateFile);
-                
-                // Process template variables
                 initialContent = processTemplateVariables(initialContent, date, stream);
             }
         }
-        
-        // Create the file
-        const file = await this.app.vault.create(filePath, initialContent);
-        
-        // Update links
-        await this.updateNoteLinks(file, stream);
-        
-        // Open the file
-        await this.app.workspace.openLinkText(file.path, '', false);
-        
-        return file;
+
+        this.markIgnored(this.ignoredCreatePaths, filePath);
+        return this.app.vault.create(filePath, initialContent);
     }
 
-    /**
-     * Update chronological links for all notes in a stream
-     */
-    async updateAllNoteLinks(stream: NoteStream): Promise<void> {
-        try {
-            // Check if folder path is valid
-            if (!stream.folderPath) {
-                new Notice('Error: Stream folder path is not specified');
-                return;
-            }
-            
-            // Get all markdown files in the stream folder
-            const files = this.app.vault.getMarkdownFiles().filter(file => 
-                file.path.startsWith(`${stream.folderPath}/`)
-            );
-            
-            if (files.length === 0) {
-                new Notice(`No notes found in ${stream.folderPath}`);
-                return;
-            }
-            
-            let updatedCount = 0;
-            let errorCount = 0;
-            
-            // Update links for each file in the stream
-            for (const file of files) {
-                try {
-                    // Check if the file belongs to this stream (by checking if the date can be parsed)
-                    const date = parseDateFromFilename(file.basename, stream.dateFormat);
-                    if (!date) continue;
-                    
-                    // Use the existing update method
-                    await this.updateNoteLinks(file, stream);
-                    updatedCount++;
-                } catch (fileError) {
-                    errorCount++;
-                    console.error(`Error updating links for file ${file.path}:`, fileError);
+    private getCandidatesForNoteName(stream: NoteStream, noteName: string): TFile[] {
+        return this.app.vault
+            .getMarkdownFiles()
+            .filter(file => file.basename === noteName && isChronologyNoteFile(file, stream))
+            .sort((left, right) => {
+                const leftSource = getChronologySourceForFolderPath(left.path, stream.folderPath, stream.noteType);
+                const rightSource = getChronologySourceForFolderPath(right.path, stream.folderPath, stream.noteType);
+
+                if (leftSource !== rightSource) {
+                    return leftSource === 'root' ? -1 : 1;
                 }
+
+                return left.path.localeCompare(right.path);
+            });
+    }
+
+    private normalizeDateForNoteType(date: moment.Moment, noteType: NoteType): moment.Moment {
+        const normalized = date.clone();
+
+        switch (noteType) {
+            case NoteType.DAY:
+                return normalized.startOf('day');
+            case NoteType.WEEK:
+                return normalized.startOf('week');
+            case NoteType.MONTH:
+                return normalized.startOf('month');
+            case NoteType.QUARTER:
+                return normalized.startOf('quarter');
+            case NoteType.HALF_YEAR:
+                return normalized.month(normalized.month() < 6 ? 0 : 6).startOf('month');
+            case NoteType.YEAR:
+                return normalized.startOf('year');
+            default:
+                return normalized;
+        }
+    }
+
+    private getCurrentPeriodDate(noteType: NoteType): moment.Moment {
+        return this.normalizeDateForNoteType(moment(), noteType);
+    }
+
+    private toWikilink(file: TFile): string {
+        const linkPath = file.path.replace(/\.md$/u, '');
+        return `[[${linkPath}|${file.basename}]]`;
+    }
+
+    private reportConflict(stream: NoteStream, resolution: ResolveExistingNoteResult, notifyUser: boolean): void {
+        console.warn(
+            `Chronolinker conflict for ${resolution.noteName} in ${stream.name || stream.folderPath}`,
+            resolution.candidates?.map(file => file.path)
+        );
+
+        if (notifyUser) {
+            new Notice(`Multiple notes found for ${resolution.noteName}. Resolve duplicates before continuing.`);
+        }
+    }
+
+    private shouldIgnoreEvent(map: Map<string, number>, path: string): boolean {
+        this.pruneIgnoredPaths(map);
+        return (map.get(path) ?? 0) > Date.now();
+    }
+
+    private isSafeDuplicatePlaceholderContent(content: string, stream: NoteStream): boolean {
+        if (content.trim().length === 0) {
+            return true;
+        }
+
+        const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*/u);
+        if (!frontmatterMatch) {
+            return false;
+        }
+
+        const body = content.slice(frontmatterMatch[0].length).trim();
+        if (body.length > 0) {
+            return false;
+        }
+
+        try {
+            const parsed = parseYaml(frontmatterMatch[1]);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return false;
             }
-            
-            if (errorCount > 0) {
-                new Notice(`Updated ${updatedCount} notes with ${errorCount} errors in stream: ${stream.name || stream.folderPath}`);
-            } else {
-                new Notice(`Successfully updated ${updatedCount} notes in stream: ${stream.name || stream.folderPath}`);
-            }
+
+            const allowedFields = new Set([
+                stream.beforeFieldName,
+                stream.afterFieldName,
+                'date-range',
+                'child-notes',
+                'updated'
+            ]);
+
+            return Object.keys(parsed as Record<string, unknown>).every(key => allowedFields.has(key));
         } catch (error) {
-            console.error('Error updating all note links:', error);
-            new Notice(`Error updating links in stream ${stream.name || stream.folderPath}: ${error.message}`);
+            console.warn('Chronolinker failed to parse duplicate placeholder frontmatter', error);
+            return false;
+        }
+    }
+
+    private markIgnored(map: Map<string, number>, path: string, durationMs = 1500): void {
+        map.set(path, Date.now() + durationMs);
+    }
+
+    private pruneIgnoredPaths(map: Map<string, number>): void {
+        const now = Date.now();
+        for (const [path, expiresAt] of map.entries()) {
+            if (expiresAt <= now) {
+                map.delete(path);
+            }
         }
     }
 }

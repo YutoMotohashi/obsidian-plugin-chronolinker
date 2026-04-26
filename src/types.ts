@@ -1,4 +1,3 @@
-import { TFile } from 'obsidian';
 import moment from 'moment';
 
 // Define note types
@@ -27,6 +26,7 @@ export interface NoteStream {
   belongingNoteType: NoteType;
   belongingNoteDateFormat: string;
   templatePath: string;
+  belongingTemplatePath?: string;
 }
 
 export interface ChronolinkerSettings {
