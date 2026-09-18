@@ -6,131 +6,225 @@ import { NoteManager } from '../services/NoteManager';
 export class CreateNoteModal extends Modal {
     private plugin: any; // Will be set to ChronolinkerPlugin
     private noteManager: NoteManager;
-    
+
     constructor(app: App, plugin: any) {
         super(app);
         this.plugin = plugin;
         this.noteManager = plugin.noteManager;
     }
-    
+
     onOpen() {
         const { contentEl } = this;
-        
-        contentEl.createEl('h2', { text: 'Create New Note' });
-        
+        const modalEl = this.modalEl;
+
+        modalEl.addClass('chronolinker-create-note-modal');
+        contentEl.addClass('chronolinker-create-note-content');
+        contentEl.empty();
+
+        const idPrefix = `chronolinker-create-note-${Date.now().toString(36)}`;
+        const streamId = `${idPrefix}-stream`;
+        const currentPeriodId = `${idPrefix}-current-period`;
+        const dateId = `${idPrefix}-date`;
+        const countId = `${idPrefix}-count`;
+
+        const form = contentEl.createEl('form', {
+            cls: 'chronolinker-create-note-form',
+            attr: { novalidate: 'true' }
+        });
+
+        const header = form.createDiv({ cls: 'chronolinker-create-note-header' });
+        header.createEl('h2', {
+            text: 'Create new note',
+            cls: 'chronolinker-create-note-title'
+        });
+
+        const fields = form.createDiv({ cls: 'chronolinker-create-note-fields' });
+
         // Stream selection
-        contentEl.createEl('h3', { text: 'Select Stream' });
-        
-        const streamSelect = contentEl.createEl('select');
-        
-        // Add options for each stream
+        const streamGroup = fields.createDiv({
+            cls: 'chronolinker-create-field-group chronolinker-create-stream-group'
+        });
+        streamGroup.createEl('label', {
+            text: 'Stream',
+            cls: 'chronolinker-create-field-label',
+            attr: { for: streamId }
+        });
+        const streamSelect = streamGroup.createEl('select', {
+            cls: 'chronolinker-create-control',
+            attr: {
+                id: streamId,
+                required: 'true'
+            }
+        });
+
         this.plugin.settings.noteStreams.forEach((stream: NoteStream) => {
             streamSelect.createEl('option', {
                 value: stream.id,
                 text: stream.name
             });
         });
-        
-        // Date selection
-        contentEl.createEl('h3', { text: 'Select Date' });
 
-        const useCurrentPeriodWrapper = contentEl.createEl('label', {
-            attr: {
-                style: 'display:flex; align-items:center; gap:8px; margin-bottom:8px;'
-            }
+        // Starting period
+        const periodGroup = fields.createDiv({
+            cls: 'chronolinker-create-field-group chronolinker-create-period-group'
         });
-        const useCurrentPeriodInput = useCurrentPeriodWrapper.createEl('input', {
-            type: 'checkbox'
+        periodGroup.createEl('label', {
+            text: 'Starting period',
+            cls: 'chronolinker-create-field-label',
+            attr: { for: dateId }
+        });
+
+        const currentPeriodLabel = periodGroup.createEl('label', {
+            cls: 'chronolinker-create-check-row',
+            attr: { for: currentPeriodId }
+        });
+        const useCurrentPeriodInput = currentPeriodLabel.createEl('input', {
+            type: 'checkbox',
+            attr: { id: currentPeriodId }
         });
         useCurrentPeriodInput.checked = true;
-        useCurrentPeriodWrapper.createSpan({ text: 'Use current period (today by default)' });
-        
-        const dateInput = contentEl.createEl('input', {
+        currentPeriodLabel.createSpan({ text: 'Use current period' });
+
+        const dateInput = periodGroup.createEl('input', {
             type: 'date',
-            value: moment().format('YYYY-MM-DD')
+            cls: 'chronolinker-create-control chronolinker-create-date-control',
+            value: moment().format('YYYY-MM-DD'),
+            attr: {
+                id: dateId,
+                required: 'true'
+            }
         });
         dateInput.disabled = true;
 
-        useCurrentPeriodInput.addEventListener('change', () => {
-            dateInput.disabled = useCurrentPeriodInput.checked;
+        // Number of periods
+        const countGroup = fields.createDiv({
+            cls: 'chronolinker-create-field-group chronolinker-create-count-group'
         });
-
-        contentEl.createEl('h3', { text: 'Periods to Create' });
-
-        const countInput = contentEl.createEl('input', {
+        countGroup.createEl('label', {
+            text: 'Number of periods',
+            cls: 'chronolinker-create-field-label',
+            attr: { for: countId }
+        });
+        const countInput = countGroup.createEl('input', {
             type: 'number',
-            value: '1'
+            cls: 'chronolinker-create-control chronolinker-create-count-control',
+            value: '1',
+            attr: {
+                id: countId,
+                min: '1',
+                step: '1',
+                required: 'true',
+                inputmode: 'numeric'
+            }
         });
-        countInput.min = '1';
-        countInput.step = '1';
-        countInput.style.width = '100px';
 
-        contentEl.createEl('p', {
-            text: 'Use 7 for a week of daily notes, 4 for four weekly notes, etc.'
+        const footer = form.createDiv({ cls: 'chronolinker-create-note-footer' });
+        const cancelButton = footer.createEl('button', {
+            text: 'Cancel',
+            cls: 'chronolinker-create-cancel-button',
+            attr: { type: 'button' }
         });
-        
-        // Create button
-        const createButton = contentEl.createEl('button', {
+        const createButton = footer.createEl('button', {
             text: 'Create',
-            cls: 'mod-cta'
+            cls: 'mod-cta chronolinker-create-submit-button',
+            attr: { type: 'submit' }
         });
-        
-        createButton.addEventListener('click', async () => {
-            const streamId = streamSelect.value;
+
+        let isSubmitting = false;
+
+        const getSelectedStream = (): NoteStream | undefined => {
+            return this.plugin.settings.noteStreams.find(
+                (stream: NoteStream) => stream.id === streamSelect.value
+            );
+        };
+
+        const getCount = (): number => {
+            return countInput.valueAsNumber;
+        };
+
+        const setSubmittingState = (submitting: boolean) => {
+            isSubmitting = submitting;
+            createButton.disabled = submitting;
+            cancelButton.disabled = submitting;
+            createButton.textContent = submitting ? 'Creating…' : 'Create';
+            createButton.setAttribute('aria-busy', String(submitting));
+        };
+
+        const submit = async () => {
+            if (isSubmitting) {
+                return;
+            }
+
             const dateStr = dateInput.value;
-            
-            const stream = this.plugin.settings.noteStreams.find((s: NoteStream) => s.id === streamId);
-            
+            const stream = getSelectedStream();
+            const count = getCount();
+
             if (stream && (useCurrentPeriodInput.checked || dateStr)) {
                 const date = useCurrentPeriodInput.checked
                     ? moment()
                     : moment(dateStr, 'YYYY-MM-DD');
-                const count = Number.parseInt(countInput.value, 10);
-                
+
                 if (date.isValid()) {
-                    if (Number.isNaN(count) || count < 1) {
-                        new Notice('Periods to create must be at least 1');
+                    if (!Number.isInteger(count) || !Number.isSafeInteger(count) || count < 1) {
+                        new Notice('Periods to create must be a positive whole number');
                         return;
                     }
 
-                    if (count === 1) {
-                        await this.noteManager.openNoteForDate(stream, date, {
-                            createIfMissing: true,
-                            open: true,
-                            reconcileIfResolved: true,
-                            updateBelonging: true,
-                            interactive: true
-                        });
-                    } else {
-                        const files = await this.noteManager.ensureNoteRange(stream, date, count, {
-                            createIfMissing: true,
-                            reconcileIfResolved: true,
-                            updateBelonging: true,
-                            interactive: true
-                        });
-                        new Notice(`Ensured ${files.length} notes for ${stream.name}`);
+                    setSubmittingState(true);
+                    try {
+                        if (count === 1) {
+                            await this.noteManager.openNoteForDate(stream, date, {
+                                createIfMissing: true,
+                                open: true,
+                                reconcileIfResolved: true,
+                                updateBelonging: true,
+                                interactive: true
+                            });
+                        } else {
+                            const files = await this.noteManager.ensureNoteRange(stream, date, count, {
+                                createIfMissing: true,
+                                reconcileIfResolved: true,
+                                updateBelonging: true,
+                                interactive: true
+                            });
+                            new Notice(`Ensured ${files.length} notes for ${stream.name}`);
+                        }
+                        this.close();
+                    } catch (error) {
+                        console.error('Chronolinker note creation failed', error);
+                        new Notice('Could not create the requested note(s).');
+                    } finally {
+                        if (this.modalEl.isConnected) {
+                            setSubmittingState(false);
+                        }
                     }
-                    this.close();
                 } else {
                     new Notice('Invalid date');
                 }
             } else {
                 new Notice('Please select a stream and date');
             }
+        };
+
+        useCurrentPeriodInput.addEventListener('change', () => {
+            dateInput.disabled = useCurrentPeriodInput.checked;
         });
-        
-        // Cancel button
-        const cancelButton = contentEl.createEl('button', {
-            text: 'Cancel'
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            void submit();
         });
-        
         cancelButton.addEventListener('click', () => {
-            this.close();
+            if (!isSubmitting) {
+                this.close();
+            }
         });
+        window.requestAnimationFrame(() => streamSelect.focus());
     }
-    
+
     onClose() {
         const { contentEl } = this;
+        contentEl.removeClass('chronolinker-create-note-content');
+        this.modalEl.removeClass('chronolinker-create-note-modal');
         contentEl.empty();
     }
 }
